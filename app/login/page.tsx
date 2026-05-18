@@ -164,7 +164,7 @@ export default function LoginPage() {
         </div>
 
         <p className="text-center text-xs text-muted-foreground mt-6">
-          Secure OCR data processing — no images stored on servers
+          Copyright © 2026 All Rights Reserved.
         </p>
       </div>
     </div>
