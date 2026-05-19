@@ -1,9 +1,10 @@
-import { createClient } from '@supabase/supabase-js';
+import { neon } from '@neondatabase/serverless'
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+if (!process.env.DATABASE_URL) {
+  throw new Error('Missing DATABASE_URL environment variable')
+}
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export const sql = neon(process.env.DATABASE_URL)
 
 export type UserRole = 'admin' | 'user';
 
