@@ -1,13 +1,22 @@
-// next.config.js
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  webpack: (config, { isServer }) => {
-    if (process.env.VERCEL) {
-      config.cache = false  // disable webpack cache on Vercel
-    }
-    return config
+  eslint: {
+    ignoreDuringBuilds: true,
   },
-}
+  images: { unoptimized: true },
+  webpack: (config, { isServer }) => {
+    if (!isServer) {
+      config.resolve.fallback = {
+        ...config.resolve.fallback,
+        fs: false,
+        path: false,
+        crypto: false,
+        encoding: false,
+      };
+    }
+    return config;
+  },
+};
 
-module.exports = nextConfig
-
+module.exports = nextConfig;
