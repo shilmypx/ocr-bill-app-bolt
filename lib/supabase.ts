@@ -30,4 +30,4 @@ export interface BillRecord {
   created_at: string
 }
 
-export type BillRecordInsert = Omit<BillRecord, 'id' | 'created_at'>
+export type BillRecordInsert = Omit<BillRecord, 'id' | 'created_at'> 
