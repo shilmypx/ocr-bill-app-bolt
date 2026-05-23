@@ -77,7 +77,7 @@ export function DashboardStats() {
           .select('profiles!bill_records_user_id_fkey(full_name)')
           .eq('status', 'success')
         const uc: Record<string, number> = {}
-        ;(us as BillRecordWithProfile[] | null)?.forEach(r => {
+        ;((us as unknown) as BillRecordWithProfile[] | null)?.forEach(r => {
           const profile = Array.isArray(r.profiles) ? r.profiles[0] : r.profiles
           const name = profile?.full_name || 'Unknown'
           uc[name] = (uc[name] || 0) + 1
