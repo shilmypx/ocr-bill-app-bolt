@@ -221,3 +221,6 @@ export default function UsersPage() {
     </div>
   )
 }
+
+// Password reset is handled via supabase.auth.resetPasswordForEmail()
+// which sends email to user - available to admin on the users page

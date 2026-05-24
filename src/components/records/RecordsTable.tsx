@@ -44,7 +44,7 @@ export function RecordsTable() {
     setLoading(true)
     let q = supabase
       .from('bill_records')
-      .select('*, profiles!bill_records_user_id_fkey(full_name, email)', { count: 'exact' })
+      .select('*, profiles(full_name, email)', { count: 'exact' })
       .order('created_at', { ascending: false })
       .range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1)
     if (!isAdmin) q = q.eq('user_id', user!.id)
