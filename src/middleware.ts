@@ -3,7 +3,6 @@ import { NextResponse, type NextRequest } from 'next/server'
 
 export async function middleware(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request })
-
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -20,26 +19,14 @@ export async function middleware(request: NextRequest) {
       },
     }
   )
-
   const { data: { user } } = await supabase.auth.getUser()
-
-  const isAuthPage = request.nextUrl.pathname.startsWith('/login') ||
-                     request.nextUrl.pathname.startsWith('/register')
-  const isDashboard = request.nextUrl.pathname.startsWith('/dashboard') ||
-                      request.nextUrl.pathname.startsWith('/capture') ||
-                      request.nextUrl.pathname.startsWith('/records') ||
-                      request.nextUrl.pathname.startsWith('/scan-logs') ||
-                      request.nextUrl.pathname.startsWith('/audit-logs') ||
-                      request.nextUrl.pathname.startsWith('/users')
-
-  if (!user && isDashboard) {
-    return NextResponse.redirect(new URL('/login', request.url))
-  }
-
-  if (user && isAuthPage) {
-    return NextResponse.redirect(new URL('/dashboard', request.url))
-  }
-
+  const path = request.nextUrl.pathname
+  const isAuth = path.startsWith('/login') || path.startsWith('/register')
+  const isDash = path.startsWith('/dashboard') || path.startsWith('/capture') ||
+    path.startsWith('/records') || path.startsWith('/scan-logs') ||
+    path.startsWith('/audit-logs') || path.startsWith('/users')
+  if (!user && isDash) return NextResponse.redirect(new URL('/login', request.url))
+  if (user && isAuth) return NextResponse.redirect(new URL('/dashboard', request.url))
   return supabaseResponse
 }
 
