@@ -208,7 +208,7 @@ export function CaptureWidget() {
         setPhase('error')
       } else {
         setPhase('review')
-        setTimeout(() => doSave(f, result), 500)
+        // Manual save required — user must press Save
       }
     } catch (err) {
       console.error('OCR error:', err)
