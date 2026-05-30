@@ -4,7 +4,7 @@ import { Camera, Edit3, Zap, Brain, RotateCcw, CheckCircle, AlertCircle, Loader2
 import { Button } from '@/components/ui/Button'
 import { Card, CardContent } from '@/components/ui/Card'
 import { toast } from '@/components/ui/Toast'
-import { performOCR, compressImage, validateContactNumber, initTesseractWorker } from '@/lib/ocr'
+import { performOCR, compressImage, validateContactNumber, splitContactNumber, initTesseractWorker } from '@/lib/ocr'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import type { OCRResult } from '@/types'
@@ -188,22 +188,11 @@ export function CaptureWidget() {
     try {
       const result = await performOCR(imageData, ocrMode)
       setOcrResult(result)
-      // Parse contact number from OCR
-      const raw = result.contactNumber || ''
-      let code = '+94'; let num = ''
-      if (raw.startsWith('+')) {
-        const digits = raw.slice(1)
-        // Take last 8 digits as local number, rest as country code
-        if (digits.length >= 9) {
-          num = digits.slice(-8)
-          code = '+' + digits.slice(0, digits.length - 8)
-        } else { num = digits }
-      } else {
-        num = raw.replace(/\D/g, '').slice(-8)
-      }
-      const f = { code, number: num, name: result.customerName || '', billNo: result.billNumber || '' }
+      // Parse contact number using helper (handles +974XXXXXXXX, +94XXXXXXXX, etc.)
+      const { code, local } = splitContactNumber(result.contactNumber || '')
+      const f = { code, number: local, name: result.customerName || '', billNo: result.billNumber || '' }
       setForm(f)
-      if (!num || !isValid(code, num)) {
+      if (!local || !isValid(code, local)) {
         setErrorMsg('Contact number not found. Edit manually or retake.')
         setPhase('error')
       } else {
