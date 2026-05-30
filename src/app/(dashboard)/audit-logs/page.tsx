@@ -22,7 +22,7 @@ const ACTION_COLORS: Record<string, 'success' | 'error' | 'info' | 'warning' | '
 }
 
 export default function AuditLogsPage() {
-  const { isAdmin } = useAuth()
+  const { isAdmin, user, loading: authLoading } = useAuth()
   const router = useRouter()
   const [logs, setLogs] = useState<AuditLog[]>([])
   const [total, setTotal] = useState(0)
@@ -44,6 +44,7 @@ export default function AuditLogsPage() {
       .select('*', { count: 'exact' })
       .order('created_at', { ascending: false })
       .range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1)
+    q = q.neq('module', 'Bill Records').or('action_type.neq.CREATE,module.neq.Bill Records')
     if (search) q = q.or(`description.ilike.%${search}%,user_email.ilike.%${search}%,action_type.ilike.%${search}%`)
     if (actionFilter) q = q.eq('action_type', actionFilter)
     if (dateFrom) q = q.gte('created_at', dateFrom)
@@ -54,7 +55,7 @@ export default function AuditLogsPage() {
     setLoading(false)
   }, [page, search, actionFilter, dateFrom, dateTo])
 
-  useEffect(() => { fetchLogs() }, [fetchLogs])
+  useEffect(() => { if (!authLoading && user && isAdmin) fetchLogs() }, [fetchLogs, authLoading, user, isAdmin])
 
   const handleExport = async () => {
     const { data } = await supabase.from('audit_logs').select('*').order('created_at', { ascending: false })

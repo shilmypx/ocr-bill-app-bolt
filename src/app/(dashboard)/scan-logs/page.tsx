@@ -12,7 +12,7 @@ import type { ScanLog } from '@/types'
 const PAGE_SIZE = 50
 
 export default function ScanLogsPage() {
-  const { user, isAdmin } = useAuth()
+  const { user, isAdmin, loading: authLoading } = useAuth()
   const [logs, setLogs] = useState<ScanLog[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -20,6 +20,7 @@ export default function ScanLogsPage() {
   const [filter, setFilter] = useState<'all' | 'success' | 'failed'>('all')
 
   const fetchLogs = useCallback(async () => {
+    if (!user) return
     setLoading(true)
     let q = supabase
       .from('scan_logs')
@@ -34,7 +35,7 @@ export default function ScanLogsPage() {
     setLoading(false)
   }, [user, isAdmin, page, filter])
 
-  useEffect(() => { fetchLogs() }, [fetchLogs])
+  useEffect(() => { if (!authLoading && user) fetchLogs() }, [fetchLogs, authLoading, user])
 
   const successCount = logs.filter(l => l.status === 'success').length
   const failedCount = logs.filter(l => l.status === 'failed').length

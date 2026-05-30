@@ -1,11 +1,11 @@
 import { createBrowserClient } from '@supabase/ssr'
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
+const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 
 export function createClient() {
-  return createBrowserClient(supabaseUrl, supabaseKey)
+  return createBrowserClient(url, key)
 }
 
-// Always create fresh client to ensure session is current
-export const supabase = createBrowserClient(supabaseUrl, supabaseKey)
+// Singleton — reused across the app
+export const supabase = createBrowserClient(url, key)

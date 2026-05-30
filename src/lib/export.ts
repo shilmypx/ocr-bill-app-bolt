@@ -41,7 +41,7 @@ export function exportFullRecords(records: BillRecord[], columns: string[]) {
     'OCR Mode': r => forceText(r.ocr_mode),
     'OCR Confidence': r => r.ocr_confidence ? `${r.ocr_confidence.toFixed(1)}%` : '',
     'Status': r => forceText(r.status),
-    'Captured By': r => forceText(r.profiles?.full_name),
+    'Captured By': r => forceText((r as any).profiles?.full_name ?? (r as any)._name),
     'Captured Date': r => r.created_at ? new Date(r.created_at).toLocaleString() : '',
   }
   const selectedCols = columns.filter(c => columnMap[c])

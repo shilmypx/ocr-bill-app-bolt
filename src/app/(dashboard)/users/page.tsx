@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
-import { Users, UserCheck, UserX, Shield, ShieldOff, RefreshCw, UserPlus, Eye, EyeOff } from 'lucide-react'
+import { UserCheck, UserX, Shield, ShieldOff, RefreshCw, UserPlus, Eye, EyeOff } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Card, CardContent, CardHeader } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Input'
@@ -37,56 +37,57 @@ export default function UsersPage() {
 
   const createUser = async () => {
     if (!newUser.email || !newUser.password) { toast('error', 'Email and password required'); return }
+    if (newUser.password.length < 6) { toast('error', 'Password must be at least 6 characters'); return }
     setCreating(true)
     try {
-      const { data, error } = await supabase.auth.admin?.createUser
-        ? await (supabase.auth as any).admin.createUser({ email: newUser.email, password: newUser.password, email_confirm: true, user_metadata: { full_name: newUser.fullName, role: newUser.role } })
-        : await supabase.auth.signUp({ email: newUser.email, password: newUser.password, options: { data: { full_name: newUser.fullName, role: newUser.role } } })
+      // Use the SQL function that bypasses email limits and "User not allowed" errors
+      const { data, error } = await supabase.rpc('admin_create_user', {
+        p_email: newUser.email,
+        p_password: newUser.password,
+        p_full_name: newUser.fullName,
+        p_role: newUser.role,
+      })
       if (error) throw error
-      // Update profile if it was created
-      if (data?.user) {
-        await supabase.from('profiles').upsert({
-          id: data.user.id, email: newUser.email, full_name: newUser.fullName,
-          role: newUser.role, is_approved: true, is_active: true,
-        })
-        await logAudit('CREATE_USER', 'Users', `Created user ${newUser.email} with role ${newUser.role}`)
-        toast('success', 'User created successfully')
-        setShowCreate(false)
-        setNewUser({ fullName: '', email: '', password: '', role: 'user' })
-        fetchUsers()
-      }
+      await logAudit('CREATE_USER', 'Users', `${(data as any)?.action === 'updated' ? 'Updated' : 'Created'} user ${newUser.email} as ${newUser.role}`)
+      toast('success', `User ${newUser.email} ${(data as any)?.action === 'updated' ? 'updated' : 'created'} successfully`)
+      setShowCreate(false)
+      setNewUser({ fullName: '', email: '', password: '', role: 'user' })
+      fetchUsers()
     } catch (e: any) {
-      toast('error', e.message || 'Failed to create user')
+      toast('error', e?.message || 'Failed to create user')
     } finally { setCreating(false) }
+  }
+
+  const updateUser = async (id: string, updates: Partial<Profile>, auditMsg: string) => {
+    const { error } = await supabase.from('profiles').update(updates).eq('id', id)
+    if (error) { toast('error', 'Update failed'); return false }
+    await logAudit('UPDATE_USER', 'Users', auditMsg)
+    fetchUsers()
+    return true
   }
 
   const toggleApprove = async (u: Profile) => {
     setActionLoading(u.id)
     const approved = !u.is_approved
-    await supabase.from('profiles').update({ is_approved: approved, approved_by: approved ? user!.id : null, approved_at: approved ? new Date().toISOString() : null }).eq('id', u.id)
-    await logAudit(approved ? 'APPROVE_USER' : 'REVOKE_USER', 'Users', `${approved ? 'Approved' : 'Revoked'} ${u.email}`)
+    await updateUser(u.id, { is_approved: approved, approved_by: approved ? user!.id : null, approved_at: approved ? new Date().toISOString() : null },
+      `${approved ? 'Approved' : 'Revoked'} ${u.email}`)
     toast('success', `User ${approved ? 'approved' : 'revoked'}`)
-    fetchUsers()
     setActionLoading(null)
   }
 
   const toggleActive = async (u: Profile) => {
     setActionLoading(u.id + 'a')
     const active = !u.is_active
-    await supabase.from('profiles').update({ is_active: active }).eq('id', u.id)
-    await logAudit(active ? 'ACTIVATE_USER' : 'DEACTIVATE_USER', 'Users', `${active ? 'Activated' : 'Deactivated'} ${u.email}`)
+    await updateUser(u.id, { is_active: active }, `${active ? 'Activated' : 'Deactivated'} ${u.email}`)
     toast('success', `User ${active ? 'activated' : 'deactivated'}`)
-    fetchUsers()
     setActionLoading(null)
   }
 
   const toggleRole = async (u: Profile) => {
-    const role = u.role === 'admin' ? 'user' : 'admin'
     setActionLoading(u.id + 'r')
-    await supabase.from('profiles').update({ role }).eq('id', u.id)
-    await logAudit('CHANGE_ROLE', 'Users', `Changed ${u.email} to ${role}`)
+    const role = u.role === 'admin' ? 'user' : 'admin'
+    await updateUser(u.id, { role }, `Changed ${u.email} to ${role}`)
     toast('success', `Role changed to ${role}`)
-    fetchUsers()
     setActionLoading(null)
   }
 
@@ -101,32 +102,35 @@ export default function UsersPage() {
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={fetchUsers} loading={loading}><RefreshCw className="h-4 w-4" /></Button>
-          <Button onClick={() => setShowCreate(s => !s)}><UserPlus className="h-4 w-4" /> Create User</Button>
+          <Button onClick={() => setShowCreate(s => !s)}><UserPlus className="h-4 w-4" />Create User</Button>
         </div>
       </div>
 
-      {/* Create user form */}
       {showCreate && (
         <Card className="border-blue-200 dark:border-blue-800">
           <CardHeader><span className="font-semibold text-gray-900 dark:text-white">Create New User</span></CardHeader>
           <CardContent>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
               <Input label="Full Name" value={newUser.fullName} onChange={e => setNewUser(f => ({ ...f, fullName: e.target.value }))} placeholder="Full name" />
-              <Input label="Email *" value={newUser.email} onChange={e => setNewUser(f => ({ ...f, email: e.target.value }))} placeholder="email@example.com" type="email" />
+              <Input label="Email *" type="email" value={newUser.email} onChange={e => setNewUser(f => ({ ...f, email: e.target.value }))} placeholder="email@example.com" />
               <div className="relative">
-                <Input label="Password *" value={newUser.password} onChange={e => setNewUser(f => ({ ...f, password: e.target.value }))} placeholder="Min 6 characters" type={showPw ? 'text' : 'password'} />
-                <button onClick={() => setShowPw(s => !s)} className="absolute right-3 top-8 text-gray-400">{showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button>
+                <Input label="Password *" type={showPw ? 'text' : 'password'} value={newUser.password}
+                  onChange={e => setNewUser(f => ({ ...f, password: e.target.value }))} placeholder="Min 6 characters" />
+                <button type="button" onClick={() => setShowPw(s => !s)}
+                  className="absolute right-3 top-8 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+                  {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Role</label>
                 <select value={newUser.role} onChange={e => setNewUser(f => ({ ...f, role: e.target.value }))}
-                  className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm">
+                  className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-white">
                   <option value="user">User</option>
                   <option value="admin">Admin</option>
                 </select>
               </div>
             </div>
-            <div className="flex gap-2 mt-4">
+            <div className="flex gap-2">
               <Button variant="outline" onClick={() => setShowCreate(false)} className="flex-1">Cancel</Button>
               <Button onClick={createUser} loading={creating} className="flex-1">Create User</Button>
             </div>
@@ -134,7 +138,6 @@ export default function UsersPage() {
         </Card>
       )}
 
-      {/* Pending */}
       {pending.length > 0 && (
         <Card className="border-amber-200 dark:border-amber-800">
           <CardHeader><span className="font-semibold text-gray-900 dark:text-white">⏳ Pending Approval ({pending.length})</span></CardHeader>
@@ -147,7 +150,7 @@ export default function UsersPage() {
                     <p className="text-xs text-gray-500">{u.email} · {formatDateTime(u.created_at)}</p>
                   </div>
                   <Button size="sm" onClick={() => toggleApprove(u)} loading={actionLoading === u.id}>
-                    <UserCheck className="h-4 w-4" /> Approve
+                    <UserCheck className="h-4 w-4" />Approve
                   </Button>
                 </div>
               ))}
@@ -156,7 +159,6 @@ export default function UsersPage() {
         </Card>
       )}
 
-      {/* All users */}
       <Card>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -177,7 +179,7 @@ export default function UsersPage() {
                 <tr key={u.id} className="border-b border-gray-100 dark:border-gray-700/50 hover:bg-gray-50 dark:hover:bg-gray-700/20">
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
-                      <div className="w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center text-xs font-bold text-blue-700 dark:text-blue-400 shrink-0">
+                      <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold text-xs shrink-0">
                         {(u.full_name || u.email || 'U')[0].toUpperCase()}
                       </div>
                       <div className="min-w-0">
@@ -197,16 +199,16 @@ export default function UsersPage() {
                   <td className="px-4 py-3">
                     {u.id !== user?.id ? (
                       <div className="flex items-center justify-end gap-1">
-                        <button onClick={() => toggleApprove(u)} disabled={actionLoading === u.id} title={u.is_approved ? 'Revoke' : 'Approve'}
-                          className="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 hover:text-blue-600 transition-colors">
+                        <button onClick={() => toggleApprove(u)} disabled={!!actionLoading} title={u.is_approved ? 'Revoke' : 'Approve'}
+                          className="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-blue-600 transition-colors">
                           {u.is_approved ? <UserX className="h-4 w-4" /> : <UserCheck className="h-4 w-4" />}
                         </button>
-                        <button onClick={() => toggleActive(u)} disabled={actionLoading === u.id + 'a'} title={u.is_active ? 'Deactivate' : 'Activate'}
-                          className="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 hover:text-amber-600 transition-colors">
+                        <button onClick={() => toggleActive(u)} disabled={!!actionLoading} title={u.is_active ? 'Deactivate' : 'Activate'}
+                          className="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-amber-600 transition-colors">
                           {u.is_active ? <ShieldOff className="h-4 w-4" /> : <Shield className="h-4 w-4" />}
                         </button>
-                        <button onClick={() => toggleRole(u)} disabled={actionLoading === u.id + 'r'} title={`Make ${u.role === 'admin' ? 'user' : 'admin'}`}
-                          className="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 hover:text-violet-600 transition-colors">
+                        <button onClick={() => toggleRole(u)} disabled={!!actionLoading} title={`Make ${u.role === 'admin' ? 'user' : 'admin'}`}
+                          className="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-violet-600 transition-colors">
                           <Shield className="h-4 w-4" />
                         </button>
                       </div>
@@ -221,6 +223,3 @@ export default function UsersPage() {
     </div>
   )
 }
-
-// Password reset is handled via supabase.auth.resetPasswordForEmail()
-// which sends email to user - available to admin on the users page
