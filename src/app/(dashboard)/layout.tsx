@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useState } from 'react'
+import { usePathname } from 'next/navigation'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/hooks/useAuth'
 import { Sidebar } from '@/components/layout/Sidebar'
@@ -11,6 +12,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const router = useRouter()
   const [darkMode, setDarkMode] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
+  const pathname = usePathname()
 
   useEffect(() => {
     const saved = localStorage.getItem('darkMode') === 'true'
@@ -55,7 +57,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       <Sidebar darkMode={darkMode} toggleDark={toggleDark} />
       <main className={`pt-14 lg:pt-0 transition-all duration-200 ${collapsed ? 'lg:ml-16' : 'lg:ml-64'}`}>
-        <div className="p-4 md:p-6 lg:p-8 max-w-7xl mx-auto">
+        <div key={pathname} className="p-4 md:p-6 lg:p-8 max-w-7xl mx-auto">
           {children}
         </div>
       </main>

@@ -13,7 +13,7 @@ type CaptureMode = 'camera' | 'upload' | 'manual'
 type OCRMode = 'fast' | 'ai'
 type Phase = 'idle' | 'processing' | 'review' | 'success' | 'error'
 
-const emptyForm = { code: '+94', number: '', name: '', billNo: '' }
+const emptyForm = { code: '+974', number: '', name: '' }
 const fullContact = (code: string, num: string) => code.trim() + num.replace(/\D/g, '')
 const isValid = (code: string, num: string) => {
   const full = fullContact(code, num)
@@ -148,7 +148,7 @@ export function CaptureWidget() {
           user_id: user.id,
           contact_number: contact,
           customer_name: f.name.trim() || null,
-          bill_number: f.billNo.trim() || null,
+          bill_number: null,
           raw_text: result?.rawText?.slice(0, 2000) || '',
           ocr_confidence: result?.confidence || 0,
           source: mode === 'manual' ? 'manual' : mode,
@@ -190,7 +190,7 @@ export function CaptureWidget() {
       setOcrResult(result)
       // Parse contact number using helper (handles +974XXXXXXXX, +94XXXXXXXX, etc.)
       const { code, local } = splitContactNumber(result.contactNumber || '')
-      const f = { code, number: local, name: result.customerName || '', billNo: result.billNumber || '' }
+      const f = { code, number: local, name: '' }
       setForm(f)
       if (!local || !isValid(code, local)) {
         setErrorMsg('Contact number not found. Edit manually or retake.')
@@ -290,7 +290,6 @@ export function CaptureWidget() {
               <PhoneInput code={form.code} number={form.number}
                 onCode={v => setForm(f => ({ ...f, code: v }))} onNum={v => setForm(f => ({ ...f, number: v }))} autoFocus />
               <Field label="Customer Name" value={form.name} onChange={v => setForm(f => ({ ...f, name: v }))} placeholder="Customer name" />
-              <Field label="Bill Number" value={form.billNo} onChange={v => setForm(f => ({ ...f, billNo: v }))} placeholder="Bill #" />
               <div className="flex gap-2 pt-1">
                 <button onClick={() => { wasFullscreen.current = true; resetAll(true) }}
                   className="flex-1 py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-xl text-sm font-medium flex items-center justify-center gap-1.5 transition-colors">
@@ -409,7 +408,6 @@ export function CaptureWidget() {
           <div className="space-y-3">
             <PhoneInput code={form.code} number={form.number} onCode={v => setForm(f => ({ ...f, code: v }))} onNum={v => setForm(f => ({ ...f, number: v }))} />
             <Field label="Customer Name" value={form.name} onChange={v => setForm(f => ({ ...f, name: v }))} placeholder="Customer name" />
-            <Field label="Bill Number" value={form.billNo} onChange={v => setForm(f => ({ ...f, billNo: v }))} placeholder="Bill #" />
           </div>
           <div className="flex gap-2 mt-4">
             <Button variant="outline" onClick={retake} className="flex-1" disabled={saving}><RotateCcw className="h-4 w-4" />Retake</Button>
@@ -439,7 +437,6 @@ export function CaptureWidget() {
           <div className="w-full space-y-3">
             <PhoneInput code={form.code} number={form.number} onCode={v => setForm(f => ({ ...f, code: v }))} onNum={v => setForm(f => ({ ...f, number: v }))} autoFocus />
             <Field label="Customer Name" value={form.name} onChange={v => setForm(f => ({ ...f, name: v }))} placeholder="Customer name" />
-            <Field label="Bill Number" value={form.billNo} onChange={v => setForm(f => ({ ...f, billNo: v }))} placeholder="Bill #" />
           </div>
           <div className="flex gap-2 w-full">
             <Button variant="outline" onClick={retake} className="flex-1"><RotateCcw className="h-4 w-4" />Retake</Button>
