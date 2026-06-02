@@ -69,6 +69,21 @@ function Field({ label, value, onChange, placeholder }: {
   )
 }
 
+
+// Read-only display — shows OCR-captured name, no editable input
+function ReadOnlyName({ name }: { name: string }) {
+  return (
+    <div>
+      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+        Customer Name <span className="text-xs font-normal text-gray-400">(from bill)</span>
+      </label>
+      <div className="w-full px-3 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700/50 text-sm min-h-[42px] text-gray-900 dark:text-white">
+        {name || <span className="text-gray-400 italic">Not detected on bill</span>}
+      </div>
+    </div>
+  )
+}
+
 export function CaptureWidget() {
   const { user } = useAuth()
   const [mode, setMode] = useState<CaptureMode>('camera')
@@ -289,7 +304,7 @@ export function CaptureWidget() {
               {phase === 'error' && <p className="text-gray-500 text-xs">{errorMsg}</p>}
               <PhoneInput code={form.code} number={form.number}
                 onCode={v => setForm(f => ({ ...f, code: v }))} onNum={v => setForm(f => ({ ...f, number: v }))} autoFocus />
-              <Field label="Customer Name" value={form.name} onChange={v => setForm(f => ({ ...f, name: v }))} placeholder="Customer name" />
+              <ReadOnlyName name={form.name} />
               <div className="flex gap-2 pt-1">
                 <button onClick={() => { wasFullscreen.current = true; resetAll(true) }}
                   className="flex-1 py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-xl text-sm font-medium flex items-center justify-center gap-1.5 transition-colors">
@@ -406,8 +421,8 @@ export function CaptureWidget() {
             {saving && <div className="flex items-center gap-1 text-xs text-blue-500"><Loader2 className="h-3.5 w-3.5 animate-spin" />Saving...</div>}
           </div>
           <div className="space-y-3">
+            <ReadOnlyName name={form.name} />
             <PhoneInput code={form.code} number={form.number} onCode={v => setForm(f => ({ ...f, code: v }))} onNum={v => setForm(f => ({ ...f, number: v }))} />
-            <Field label="Customer Name" value={form.name} onChange={v => setForm(f => ({ ...f, name: v }))} placeholder="Customer name" />
           </div>
           <div className="flex gap-2 mt-4">
             <Button variant="outline" onClick={retake} className="flex-1" disabled={saving}><RotateCcw className="h-4 w-4" />Retake</Button>
@@ -435,8 +450,8 @@ export function CaptureWidget() {
           <div className="w-14 h-14 bg-red-100 dark:bg-red-900/30 rounded-full flex items-center justify-center"><AlertCircle className="h-7 w-7 text-red-600 dark:text-red-400" /></div>
           <div className="text-center"><p className="font-bold text-gray-900 dark:text-white">OCR Failed</p><p className="text-sm text-gray-500">{errorMsg}</p></div>
           <div className="w-full space-y-3">
+            <ReadOnlyName name={form.name} />
             <PhoneInput code={form.code} number={form.number} onCode={v => setForm(f => ({ ...f, code: v }))} onNum={v => setForm(f => ({ ...f, number: v }))} autoFocus />
-            <Field label="Customer Name" value={form.name} onChange={v => setForm(f => ({ ...f, name: v }))} placeholder="Customer name" />
           </div>
           <div className="flex gap-2 w-full">
             <Button variant="outline" onClick={retake} className="flex-1"><RotateCcw className="h-4 w-4" />Retake</Button>
