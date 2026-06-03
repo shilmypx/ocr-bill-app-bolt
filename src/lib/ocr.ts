@@ -215,6 +215,21 @@ function findPhone(text: string): { code: string; local: string; full: string } 
 }
 
 // ── Name finder ───────────────────────────────────────────────────────────────
+
+// A name is valid if it contains ONLY basic Latin letters, spaces, hyphens, apostrophes, dots
+// This intentionally rejects Arabic characters AND OCR garbage (symbols, non-ASCII)
+function isLatinName(s: string): boolean {
+  if (!s || s.length < 2 || s.length > 80) return false
+  if (/^\d/.test(s) || /^\+/.test(s)) return false
+  // Reject if contains non-Latin characters (Arabic, symbols, etc.)
+  if (!/^[a-zA-Z][a-zA-Z\s\-''.]*$/.test(s)) return false
+  // Reject known label words
+  if (/^(customer|mobile|phone|tel|order|delivery|vendor|pickup|collection|hurrier|snoonu|rafeeq|no cutlery|subtotal|total|prepaid|not paid)/i.test(s)) return false
+  return true
+}
+
+function isValidName(s: string): boolean { return isLatinName(s) }
+
 function findName(text: string): string {
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
 
@@ -222,39 +237,35 @@ function findName(text: string): string {
   for (let i = 0; i < lines.length; i++) {
     if (!/^customer[\s(:]/i.test(lines[i])) continue
 
-    // Name after the colon on same line
+    // Name after colon on same line
     const afterColon = lines[i].replace(/^.*?:\s*/i, '').trim()
-    if (isValidName(afterColon)) return afterColon
+    if (isLatinName(afterColon)) return afterColon
 
-    // Name on next line (Izghawa direct has "Customer:\nTee")
-    if (i + 1 < lines.length && isValidName(lines[i + 1])) return lines[i + 1]
+    // Name on next line (Izghawa direct: "Customer:\nTee")
+    if (i + 1 < lines.length && isLatinName(lines[i + 1])) return lines[i + 1]
   }
 
-  // Hurrier: name sits right before or beside the order number line
-  // Format: "#6207  noura noura" or separate lines
-  for (let i = 0; i < lines.length; i++) {
-    if (/^#\d{4,6}/.test(lines[i])) {
-      // Name might be on same line after the #number
-      const afterHash = lines[i].replace(/^#\d+\s*/, '').trim()
-      if (isValidName(afterHash)) return afterHash
-    }
-  }
-
-  // Hurrier: name before TEL: line
+  // Hurrier: name sits on 1 or 2 lines right before "TEL:"
+  // e.g. "noura" / "noura" / "TEL: +"  → join as "noura noura"
   for (let i = 1; i < lines.length; i++) {
-    if (/^tel[\s:]/i.test(lines[i]) && isValidName(lines[i - 1])) {
-      return lines[i - 1]
+    if (!/^tel[\s:]/i.test(lines[i])) continue
+    const prev1 = lines[i - 1]?.trim() ?? ''
+    const prev2 = i > 1 ? (lines[i - 2]?.trim() ?? '') : ''
+    if (isLatinName(prev1) && isLatinName(prev2)) {
+      return `${prev2} ${prev1}` // "noura noura"
+    }
+    if (isLatinName(prev1)) return prev1
+  }
+
+  // Hurrier: name on same line as order number "#6207 noura noura"
+  for (const line of lines) {
+    if (/^#\d{4,6}/.test(line)) {
+      const afterHash = line.replace(/^#\d+\s*/, '').trim()
+      if (isLatinName(afterHash)) return afterHash
     }
   }
 
   return ''
-}
-
-function isValidName(s: string): boolean {
-  if (!s || s.length < 2 || s.length > 80) return false
-  if (/^\d/.test(s) || /^\+/.test(s)) return false
-  if (/^(customer|mobile|phone|tel|order|delivery|vendor|العميل|هاتف|pickup|collection|hurrier|snoonu|rafeeq|no\s*cutlery|subtotal|total|delivery\s*fee)/i.test(s)) return false
-  return true
 }
 
 // ── Order number finder ───────────────────────────────────────────────────────

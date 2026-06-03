@@ -17,11 +17,13 @@ type Phase = 'idle' | 'processing' | 'review' | 'success' | 'error'
 const join = (code: string, num: string) => code.trim() + num.replace(/\D/g, '')
 
 // Validation: country code = + then 2-4 digits, local = min 8 digits, total ≥ 12
+// +974 exactly + exactly 8 digits = valid Qatar number
 const valid = (code: string, num: string): boolean => {
-  const c = code.trim()
-  const n = num.replace(/\D/g, '')
-  return /^\+\d{2,4}$/.test(c) && n.length >= 8
+  return code.trim() === '+974' && num.replace(/\D/g, '').length === 8
 }
+// For highlighting individual fields
+const codeValid = (code: string) => code.trim() === '+974'
+const numValid = (num: string) => num.replace(/\D/g, '').length === 8
 
 // Parse a raw OCR phone string into { code, local }
 // Handles: +97450100084, 97450100084, 07450100084 (misread +), 66915444 (8 digits)
@@ -89,28 +91,39 @@ function NameField({ value, onChange }: { value: string; onChange: (v: string) =
   )
 }
 
-// Editable phone input: [+974] [41105663]
+// Editable phone input with per-field red highlighting
+// Code box: red if not +974 | Number box: red if not exactly 8 digits
 function PhoneInput({ code, num, onCode, onNum, autoFocus }: {
   code: string; num: string
   onCode: (v: string) => void; onNum: (v: string) => void
   autoFocus?: boolean
 }) {
+  const digits = num.replace(/\D/g, '')
+  const codeOk = codeValid(code)
+  const nOk = numValid(num)
   const full = join(code, num)
-  const ok = !num || valid(code, num)
+  const showCodeErr = code.trim() !== '' && !codeOk
+  const showNumErr = digits.length > 0 && !nOk
+
   return (
     <div>
       <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
         Contact Number <span className="text-red-500">*</span>
-        <span className="text-gray-400 font-normal ml-1">(country code + 8 digits)</span>
+        <span className="text-gray-400 font-normal ml-1">(+974 · 8 digits)</span>
       </label>
-      <div className={`flex rounded-xl overflow-hidden border transition-all focus-within:ring-2 focus-within:ring-blue-500 ${!ok && num ? 'border-red-400' : 'border-gray-300 dark:border-gray-600'}`}>
+      <div className="flex rounded-xl overflow-hidden border border-gray-300 dark:border-gray-600 focus-within:ring-2 focus-within:ring-blue-500">
+        {/* Country code box — red ring if not +974 */}
         <input
           value={code}
           onChange={e => onCode(e.target.value)}
           autoComplete="off"
-          className="w-[72px] shrink-0 px-2 py-3 text-center text-sm font-mono font-bold bg-gray-50 dark:bg-gray-700 text-gray-800 dark:text-gray-200 border-r border-gray-300 dark:border-gray-600 focus:outline-none"
+          className={`w-[72px] shrink-0 px-2 py-3 text-center text-sm font-mono font-bold border-r focus:outline-none transition-colors
+            ${showCodeErr
+              ? 'bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300 border-r-red-400'
+              : 'bg-gray-50 dark:bg-gray-700 text-gray-800 dark:text-gray-200 border-r-gray-300 dark:border-r-gray-600'}`}
           placeholder="+974"
         />
+        {/* Number box — red text if not 8 digits */}
         <input
           type="tel"
           value={num}
@@ -118,13 +131,17 @@ function PhoneInput({ code, num, onCode, onNum, autoFocus }: {
           autoComplete="off"
           onChange={e => onNum(e.target.value.replace(/\D/g, '').slice(0, 10))}
           placeholder="41105663"
-          className="flex-1 px-3 py-3 text-base font-mono bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none"
+          className={`flex-1 px-3 py-3 text-base font-mono focus:outline-none transition-colors
+            ${showNumErr
+              ? 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300'
+              : 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white'}`}
         />
       </div>
-      {num && (
-        <p className={`text-xs mt-1 ${ok ? 'text-gray-400' : 'text-red-500'}`}>
-          {ok ? `Full: ${full}` : `Min 8 digits required (have ${num.replace(/\D/g, '').length})`}
-        </p>
+      {/* Error hints */}
+      {showCodeErr && <p className="text-xs text-red-500 mt-1">Country code must be +974</p>}
+      {showNumErr && <p className="text-xs text-red-500 mt-1">Must be exactly 8 digits (currently {digits.length})</p>}
+      {!showCodeErr && !showNumErr && digits.length === 8 && (
+        <p className="text-xs text-gray-400 mt-1">Full: {full}</p>
       )}
     </div>
   )
@@ -233,10 +250,11 @@ export function CaptureWidget() {
       setOcr(result)
       // Parse phone — handles OCR misreads of + sign
       const { code, local } = parseOCRPhone(result.contactNumber || '')
-      // Clear Arabic names — user types them manually
-      const isArabic = (s: string) => /[\u0600-\u06FF]/.test(s)
+      // Clear non-Latin names (Arabic, OCR garbage from Arabic text)
+      // Only keep names that are purely basic Latin letters + spaces/hyphens
       const extractedName = result.customerName || ''
-      const f = { code, num: local, name: isArabic(extractedName) ? '' : extractedName }
+      const isLatinOnly = (s: string) => /^[a-zA-Z][a-zA-Z\s\-''.]*$/.test(s.trim())
+      const f = { code, num: local, name: isLatinOnly(extractedName) ? extractedName : '' }
       setForm(f)
       if (!local || !valid(code, local)) {
         setErrMsg('Contact number not detected — enter manually or retake.')
