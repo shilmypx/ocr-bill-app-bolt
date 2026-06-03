@@ -51,39 +51,64 @@ export async function compressImage(file: File): Promise<string> {
 //  5. Generic international fallback
 
 function normalisePhone(raw: string): { code: string; local: string; full: string } | null {
-  // Remove formatting chars but preserve + for detection
-  const stripped = raw.replace(/[().\s\-]/g, '')
-  const digits = stripped.replace(/\D/g, '')
+  // Strip parens, spaces, dashes
+  const stripped = raw.replace(/[()]/g, '').replace(/[\s\-]/g, '')
 
-  if (!digits || digits.length < 8) return null
+  let digits = ''
 
-  // ── Qatar patterns ────────────────────────────────────────────────────────
+  if (stripped.startsWith('+')) {
+    digits = stripped.slice(1).replace(/\D/g, '')
+  } else if (stripped.startsWith('00')) {
+    digits = stripped.slice(2).replace(/\D/g, '')
+  } else {
+    digits = stripped.replace(/\D/g, '')
+  }
 
-  // Pattern: exactly 8 digits (no country code) → default +974
+  if (!digits) return null
+
+  // ── Fix OCR misread of + sign ──────────────────────────────────────────────
+  // The + sign is often misread as 0, 8, or other digit by OCR.
+  // Real Qatar numbers are +974XXXXXXXX (11 digits total after +).
+  // If OCR reads "07450100084" or "87450100084" we need to detect and fix.
+  //
+  // Heuristic: if digits length is 11 AND starts with 0/8/6 followed by 74
+  // that looks like a misread Qatar number (+974...) → strip first char, add 974
+  if (digits.length === 11 && /^[0-9]74/.test(digits)) {
+    // e.g. "07450100084" → first char "0" is misread "+" → "7450100084"? No.
+    // Actually: "+97450100084" misread as "07450100084" means:
+    //   correct digits = 97450100084 (11 digits)
+    //   OCR read first digit wrong: 9→0 or 9→8
+    // If starts with X74... where X is not 9, it's likely a misread of 9
+    const fixedDigits = '9' + digits.slice(1)
+    if (fixedDigits.startsWith('974') && fixedDigits.length === 11) {
+      return { code: '+974', local: fixedDigits.slice(3), full: '+' + fixedDigits }
+    }
+  }
+
+  // ── Rule 1: exactly 8 digits → Qatar default ──────────────────────────────
+  // Covers: "66915444", "+66915444", "55575759"
   if (digits.length === 8) {
     return { code: '+974', local: digits, full: '+974' + digits }
   }
 
-  // Pattern: "974" + 8 digits = 11 digits → +974XXXXXXXX (clean)
+  // ── Rule 2: 9 digits → Qatar default (+974 + 9 local) ─────────────────────
+  // Some Qatar numbers have 9-digit locals
+  if (digits.length === 9 && !digits.startsWith('974')) {
+    return { code: '+974', local: digits, full: '+974' + digits }
+  }
+
+  // ── Rule 3: 11 digits starting with 974 → Qatar ───────────────────────────
+  // Covers: "+97451118518", "+97470000746"
   if (digits.startsWith('974') && digits.length === 11) {
     return { code: '+974', local: digits.slice(3), full: '+' + digits }
   }
 
-  // Pattern: [1 junk char] + "974" + 8 digits = 12 digits
-  // Handles OCR misread of "+" as "0", "8", "B→8", "l→1", etc.
-  if (digits.length === 12 && digits.slice(1).startsWith('974')) {
-    const local = digits.slice(4) // skip junk + "974"
-    return { code: '+974', local, full: '+974' + local }
+  // ── Rule 4: 12+ digits starting with 974 → Qatar ──────────────────────────
+  if (digits.startsWith('974') && digits.length === 12) {
+    return { code: '+974', local: digits.slice(3), full: '+' + digits }
   }
 
-  // Pattern: "+974" + 8 digits (already correct, 12 total with +)
-  if (stripped.startsWith('+974') && digits.length === 11) {
-    return { code: '+974', local: digits.slice(3), full: '+974' + digits.slice(3) }
-  }
-
-  // ── Generic international ─────────────────────────────────────────────────
-
-  // 9-15 digits: last 8 = local, rest = country code
+  // ── Rule 5: generic international ─────────────────────────────────────────
   if (digits.length >= 9 && digits.length <= 15) {
     const local = digits.slice(-8)
     const codeD = digits.slice(0, digits.length - 8)
