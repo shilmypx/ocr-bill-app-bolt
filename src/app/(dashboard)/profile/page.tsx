@@ -63,12 +63,13 @@ export default function ProfilePage() {
     : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400'
 
   return (
-    <div className="max-w-lg space-y-6">
+    <div className="max-w-4xl">
       <div>
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white">My Profile</h1>
         <p className="text-sm text-gray-500 mt-0.5">Account info and password settings</p>
       </div>
 
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
       {/* Account Info */}
       <Card>
         <CardHeader><div className="flex items-center gap-2"><User className="h-5 w-5 text-blue-500" /><span className="font-semibold">Account Information</span></div></CardHeader>
@@ -107,6 +108,7 @@ export default function ProfilePage() {
           </Button>
         </CardContent>
       </Card>
+      </div>
     </div>
   )
 }

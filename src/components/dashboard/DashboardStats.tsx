@@ -25,16 +25,22 @@ export function DashboardStats() {
   const [err, setErr] = useState('')
 
   const load = useCallback(async () => {
-    if (!user?.id) return
     setLoading(true); setErr('')
     try {
+      // Always get fresh session - avoids stale auth context issues
+      const { data: { session } } = await supabase.auth.getSession()
+      const uid = session?.user?.id
+      if (!uid) { setErr('Not authenticated'); setLoading(false); return }
+      const { data: prof } = await supabase.from('profiles').select('role').eq('id', uid).single()
+      const admin = prof?.role === 'admin'
+
       const { data, error } = await supabase.rpc('get_user_bill_stats', {
-        p_user_id: user.id, p_is_admin: isAdmin
+        p_user_id: uid, p_is_admin: admin
       })
       if (error) throw error
       setStats(data || { total: 0, unique_contacts: 0, today: 0, this_month: 0, duplicate_count: 0 })
 
-      if (isAdmin) {
+      if (admin) {
         const { data: pr } = await supabase
           .from('bill_records')
           .select('delivery_partner')
@@ -48,7 +54,7 @@ export function DashboardStats() {
     } catch (e: any) {
       setErr(e?.message || 'Failed to load stats')
     } finally { setLoading(false) }
-  }, [user?.id, isAdmin])
+  }, [])
 
   // Re-fetch when user changes OR when component becomes visible
   useEffect(() => { load() }, [load])
