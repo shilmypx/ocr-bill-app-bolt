@@ -15,7 +15,7 @@ export interface BillRecord {
   user_id: string
   customer_name?: string | null
   contact_number: string
-  bill_number?: string | null
+  order_number?: string | null
   bill_date?: string | null
   restaurant?: string | null
   address?: string | null
@@ -60,7 +60,7 @@ export interface AuditLog {
 export interface OCRResult {
   customerName: string
   contactNumber: string
-  billNumber: string
+  orderNumber: string
   billDate: string
   restaurant: string
   address: string

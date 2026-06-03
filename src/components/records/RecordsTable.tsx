@@ -61,7 +61,7 @@ export function RecordsTable() {
           q = q.or(
             `customer_name.ilike.%${search.trim()}%,` +
             `contact_number.ilike.%${search.trim()}%,` +
-            `bill_number.ilike.%${search.trim()}%`
+            `order_number.ilike.%${search.trim()}%`
           )
         }
         if (dateFrom) q = q.gte('created_at', dateFrom + 'T00:00:00Z')
@@ -109,7 +109,7 @@ export function RecordsTable() {
     const { error } = await supabase.from('bill_records').update({
       customer_name: editForm.customer_name,
       contact_number: editForm.contact_number,
-      bill_number: editForm.bill_number,
+      order_number: editForm.order_number,
     }).eq('id', id)
     if (error) { toast('error', error.message); return }
     toast('success', 'Updated')
@@ -118,14 +118,14 @@ export function RecordsTable() {
   }
 
   const exportUnique = async () => {
-    let q = supabase.from('bill_records').select('bill_number,customer_name,contact_number').eq('status', 'success')
+    let q = supabase.from('bill_records').select('order_number,customer_name,contact_number').eq('status', 'success')
     if (!isAdmin) q = q.eq('user_id', user!.id)
     const { data } = await q
     const seen = new Set<string>()
     const unique = (data ?? []).filter((r: any) => { if (seen.has(r.contact_number)) return false; seen.add(r.contact_number); return true })
     const wb = XLSX.utils.book_new()
     const ws = XLSX.utils.json_to_sheet(unique.map((r: any) => ({
-      'Bill Number': r.bill_number || '', 'Customer Name': r.customer_name || '',
+      'Order Number': r.order_number || '', 'Customer Name': r.customer_name || '',
       'Contact Number': String(r.contact_number),
     })))
     XLSX.utils.book_append_sheet(wb, ws, 'Unique Contacts')
@@ -139,7 +139,7 @@ export function RecordsTable() {
     const wb = XLSX.utils.book_new()
     const ws = XLSX.utils.json_to_sheet((data ?? []).map((r: any) => ({
       'Customer Name': r.customer_name || '', 'Contact Number': String(r.contact_number),
-      'Bill Number': r.bill_number || '', 'Captured Date': r.created_at ? new Date(r.created_at).toLocaleString() : '',
+      'Order Number': r.order_number || '', 'Captured Date': r.created_at ? new Date(r.created_at).toLocaleString() : '',
     })))
     XLSX.utils.book_append_sheet(wb, ws, 'Records')
     XLSX.writeFile(wb, `bill_records_${new Date().toISOString().slice(0, 10)}.xlsx`)
@@ -211,7 +211,7 @@ export function RecordsTable() {
               <tr className="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
                 <th className="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Customer</th>
                 <th className="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Contact</th>
-                <th className="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase hidden md:table-cell">Bill #</th>
+                <th className="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase hidden md:table-cell">Order #</th>
                 <th className="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase hidden lg:table-cell">Captured By</th>
                 <th className="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase hidden sm:table-cell">Date</th>
                 <th className="px-3 py-3 text-right text-xs font-semibold text-gray-500 uppercase">Actions</th>
@@ -242,8 +242,8 @@ export function RecordsTable() {
                           : <span className="font-mono text-sm text-gray-800 dark:text-gray-200">{r.contact_number}</span>}
                       </td>
                       <td className="px-3 py-3 hidden md:table-cell">
-                        {editing ? <input value={editForm.bill_number || ''} onChange={e => setEditForm((f: any) => ({ ...f, bill_number: e.target.value }))} className="w-full px-2 py-1 rounded border border-blue-400 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-white" />
-                          : <span className="text-gray-600 dark:text-gray-400">{r.bill_number || '—'}</span>}
+                        {editing ? <input value={editForm.order_number || ''} onChange={e => setEditForm((f: any) => ({ ...f, order_number: e.target.value }))} className="w-full px-2 py-1 rounded border border-blue-400 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-white" />
+                          : <span className="text-gray-600 dark:text-gray-400">{r.order_number || '—'}</span>}
                       </td>
                       <td className="px-3 py-3 text-xs text-gray-500 hidden lg:table-cell">{r._name}</td>
                       <td className="px-3 py-3 text-xs text-gray-500 hidden sm:table-cell">{r.created_at ? new Date(r.created_at).toLocaleDateString() : '—'}</td>
@@ -256,7 +256,7 @@ export function RecordsTable() {
                             <button onClick={() => setExpanded(expanded === r.id ? null : r.id)} className="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400">
                               {expanded === r.id ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                             </button>
-                            <button onClick={() => { setEditId(r.id); setEditForm({ customer_name: r.customer_name || '', contact_number: r.contact_number || '', bill_number: r.bill_number || '' }) }}
+                            <button onClick={() => { setEditId(r.id); setEditForm({ customer_name: r.customer_name || '', contact_number: r.contact_number || '', order_number: r.order_number || '' }) }}
                               className="p-1.5 rounded hover:bg-blue-50 dark:hover:bg-blue-900/20 text-blue-500"><Edit2 className="h-4 w-4" /></button>
                             <button onClick={() => deleteRow(r.id)} className="p-1.5 rounded hover:bg-red-50 dark:hover:bg-red-900/20 text-red-500"><Trash2 className="h-4 w-4" /></button>
                           </>}
@@ -267,7 +267,7 @@ export function RecordsTable() {
                       <tr className="border-b border-gray-100 dark:border-gray-700/50 bg-blue-50/20 dark:bg-blue-900/5">
                         <td colSpan={6} className="px-4 py-3">
                           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
-                            <div><span className="text-gray-400 block mb-0.5">Bill #</span><span className="font-medium text-gray-900 dark:text-white">{r.bill_number || '—'}</span></div>
+                            <div><span className="text-gray-400 block mb-0.5">Order #</span><span className="font-medium text-gray-900 dark:text-white">{r.order_number || '—'}</span></div>
                             <div><span className="text-gray-400 block mb-0.5">Captured By</span><span className="font-medium text-gray-900 dark:text-white">{r._name}</span></div>
                             <div><span className="text-gray-400 block mb-0.5">Captured At</span><span className="font-medium text-gray-900 dark:text-white">{formatDateTime(r.created_at)}</span></div>
                             <div><span className="text-gray-400 block mb-0.5">Source</span><Badge variant="default">{r.source || '—'}</Badge></div>

@@ -33,7 +33,7 @@ export function exportFullRecords(records: BillRecord[], columns: string[]) {
     'Customer Name': r => forceText(r.customer_name),
     'Contact Number': r => ({ v: forceText(r.contact_number), t: 's' }),
     'Bill Date': r => forceText(r.bill_date),
-    'Bill Number': r => forceText(r.bill_number),
+    'Order Number': r => forceText(r.order_number),
     'Partner': r => forceText(r.delivery_partner),
     'Restaurant': r => forceText(r.restaurant),
     'Address': r => forceText(r.address),

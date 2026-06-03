@@ -193,7 +193,9 @@ export function CaptureWidget() {
         user_id: user.id,
         contact_number: contact,
         customer_name: f.name.trim() || null,
-        bill_number: result?.billNumber?.trim() || null,
+        order_number: result?.orderNumber?.trim() || null,
+        bill_date: result?.billDate?.trim() || null,
+        restaurant: result?.restaurant?.trim() || null,
         raw_text: result?.rawText?.slice(0, 2000) || '',
         ocr_confidence: result?.confidence || 0,
         delivery_partner: result?.deliveryPartner || null,
@@ -304,7 +306,7 @@ export function CaptureWidget() {
         </div>
       )}
 
-      {/* Review / Error — ONLY name display + contact input — NO Bill Number */}
+      {/* Review / Error — ONLY name display + contact input — NO Order Number */}
       {(phase === 'review' || phase === 'error') && (
         <div className="absolute inset-0 bg-black/90 z-10 overflow-y-auto">
           <div className="min-h-full flex items-start justify-center p-4 pt-10">
