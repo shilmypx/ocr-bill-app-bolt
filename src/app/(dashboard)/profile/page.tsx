@@ -1,11 +1,12 @@
 'use client'
 import { useState } from 'react'
-import { Eye, EyeOff } from 'lucide-react'
+import { Eye, EyeOff, User, Lock } from 'lucide-react'
 import { Card, CardContent, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { toast } from '@/components/ui/Toast'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
+import { logAudit } from '@/lib/audit'
 
 function PwField({ label, value, onChange, placeholder }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string }) {
   const [show, setShow] = useState(false)
@@ -30,15 +31,23 @@ export default function ProfilePage() {
   const [confirmPw, setConfirmPw] = useState('')
   const [loading, setLoading] = useState(false)
 
-  const changePassword = async (e: React.FormEvent) => {
-    e.preventDefault()
+  const changePassword = async () => {
     if (!newPw) { toast('error', 'Enter a new password'); return }
     if (newPw !== confirmPw) { toast('error', 'Passwords do not match'); return }
-    if (newPw.length < 6) { toast('error', 'Password must be at least 6 characters'); return }
+    if (newPw.length < 6) { toast('error', 'Minimum 6 characters required'); return }
     setLoading(true)
     try {
+      // Refresh session first to ensure token is valid
+      const { data: { session }, error: sessErr } = await supabase.auth.getSession()
+      if (sessErr || !session) {
+        toast('error', 'Session expired — please log in again')
+        return
+      }
+
       const { error } = await supabase.auth.updateUser({ password: newPw })
-      if (error) { toast('error', error.message); return }
+      if (error) throw error
+
+      await logAudit('CHANGE_PASSWORD', 'Profile', 'User changed their password')
       toast('success', 'Password updated successfully')
       setNewPw('')
       setConfirmPw('')
@@ -54,56 +63,48 @@ export default function ProfilePage() {
     : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400'
 
   return (
-    <div className="max-w-lg">
-      <div className="mb-6">
+    <div className="max-w-lg space-y-6">
+      <div>
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white">My Profile</h1>
         <p className="text-sm text-gray-500 mt-0.5">Account info and password settings</p>
       </div>
 
-      <Card className="mb-4">
-        <CardHeader><span className="font-semibold text-gray-900 dark:text-white">Account Info</span></CardHeader>
-        <CardContent>
-          {profile ? (
-            <div className="flex items-center gap-4">
-              <div className="w-16 h-16 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold text-2xl shrink-0">
-                {(profile.full_name || profile.email || 'U')[0].toUpperCase()}
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="font-bold text-gray-900 dark:text-white text-lg leading-tight">{profile.full_name || '(no name)'}</p>
-                <p className="text-sm text-gray-500 truncate">{profile.email}</p>
-                <div className="flex items-center gap-2 mt-1.5">
-                  <span className={`text-xs font-semibold px-2 py-0.5 rounded-full capitalize ${roleCls}`}>{profile.role}</span>
-                  <span className={`text-xs font-medium ${profile.is_approved ? 'text-green-600 dark:text-green-400' : 'text-amber-500'}`}>
-                    {profile.is_approved ? '✓ Approved' : '⏳ Pending'}
-                  </span>
-                </div>
-                {profile.created_at && (
-                  <p className="text-xs text-gray-400 mt-1">Member since {new Date(profile.created_at).toLocaleDateString()}</p>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div className="flex items-center gap-4 animate-pulse">
-              <div className="w-16 h-16 rounded-full bg-gray-200 dark:bg-gray-700" />
-              <div className="flex-1 space-y-2">
-                <div className="h-5 bg-gray-200 dark:bg-gray-700 rounded w-1/2" />
-                <div className="h-3 bg-gray-200 dark:bg-gray-700 rounded w-2/3" />
-              </div>
-            </div>
-          )}
+      {/* Account Info */}
+      <Card>
+        <CardHeader><div className="flex items-center gap-2"><User className="h-5 w-5 text-blue-500" /><span className="font-semibold">Account Information</span></div></CardHeader>
+        <CardContent className="space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Full Name</label>
+            <p className="text-sm font-medium text-gray-900 dark:text-white">{profile?.full_name || '—'}</p>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Email</label>
+            <p className="text-sm font-medium text-gray-900 dark:text-white">{user?.email}</p>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Role</label>
+            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${roleCls}`}>
+              {profile?.role === 'admin' ? '⚡ Admin' : '👤 User'}
+            </span>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Status</label>
+            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${profile?.is_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+              {profile?.is_active ? '✓ Active' : '✗ Inactive'}
+            </span>
+          </div>
         </CardContent>
       </Card>
 
+      {/* Change Password */}
       <Card>
-        <CardHeader><span className="font-semibold text-gray-900 dark:text-white">Change Password</span></CardHeader>
-        <CardContent>
-          <form onSubmit={changePassword} className="space-y-4">
-            <PwField label="New Password" value={newPw} onChange={setNewPw} placeholder="At least 6 characters" />
-            <PwField label="Confirm Password" value={confirmPw} onChange={setConfirmPw} placeholder="Repeat new password" />
-            <Button type="submit" loading={loading} className="w-full" disabled={!newPw || !confirmPw}>
-              Update Password
-            </Button>
-          </form>
+        <CardHeader><div className="flex items-center gap-2"><Lock className="h-5 w-5 text-blue-500" /><span className="font-semibold">Change Password</span></div></CardHeader>
+        <CardContent className="space-y-4">
+          <PwField label="New Password" value={newPw} onChange={setNewPw} placeholder="Min 6 characters" />
+          <PwField label="Confirm Password" value={confirmPw} onChange={setConfirmPw} placeholder="Repeat new password" />
+          <Button onClick={changePassword} loading={loading} disabled={!newPw || !confirmPw} className="w-full">
+            Update Password
+          </Button>
         </CardContent>
       </Card>
     </div>
