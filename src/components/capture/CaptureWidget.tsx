@@ -384,7 +384,11 @@ export function CaptureWidget() {
               </div>
 
               <div className="flex gap-2 pt-1">
-                <button onClick={() => { wasFull.current = true; reset(true) }}
+                <button onClick={() => {
+                  // Stay in fullscreen — only reset state; camera restarts via useEffect
+                  setPhase('idle'); setOcr(null); setErrMsg('')
+                  setForm(empty); setSaving(false); setIsDup(false)
+                }}
                   className="flex-1 py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-xl text-sm font-medium flex items-center justify-center gap-1.5">
                   <RotateCcw className="h-4 w-4" /> Retake
                 </button>
