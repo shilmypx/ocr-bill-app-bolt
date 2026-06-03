@@ -15,9 +15,14 @@ type Phase = 'idle' | 'processing' | 'review' | 'success' | 'error'
 
 const emptyForm = { code: '+974', number: '', name: '' }
 const fullContact = (code: string, num: string) => code.trim() + num.replace(/\D/g, '')
-const isValid = (code: string, num: string) => {
-  const full = fullContact(code, num)
-  return full.length >= 9 && /^\+\d{9,15}$/.test(full)
+const isValid = (code: string, num: string): boolean => {
+  // Rule: code must be + then 2-4 digits (e.g. +974)
+  // Number must be min 8 digits
+  // Total min: 1(+) + 3(code) + 8(local) = 12 chars for +974
+  const c = code.trim()
+  const n = num.replace(/\D/g, '')
+  if (!/^\+\d{2,4}$/.test(c)) return false
+  return n.length >= 8
 }
 
 // Phone input: editable country code + number
@@ -37,7 +42,7 @@ function PhoneInput({ code, number, onCode, onNum, autoFocus }: {
           value={code}
           onChange={e => onCode(e.target.value)}
           className="w-16 shrink-0 px-2 py-3 text-center text-sm font-mono font-bold bg-gray-50 dark:bg-gray-700 text-gray-800 dark:text-gray-200 border-r border-gray-300 dark:border-gray-600 focus:outline-none"
-          placeholder="+94"
+          placeholder="+974"
         />
         <input
           type="tel"

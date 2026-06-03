@@ -10,7 +10,7 @@ export async function initTesseractWorker() {
     const { createWorker } = await import('tesseract.js')
     worker = await createWorker('eng', 1, { logger: () => {}, errorHandler: () => {} })
     workerReady = true
-  } catch (e) { console.warn('Tesseract init failed:', e) }
+  } catch (e) { console.warn('Tesseract init:', e) }
 }
 
 export async function compressImage(file: File): Promise<string> {
@@ -19,18 +19,18 @@ export async function compressImage(file: File): Promise<string> {
     const url = URL.createObjectURL(file)
     img.onload = () => {
       URL.revokeObjectURL(url)
-      const canvas = document.createElement('canvas')
+      const c = document.createElement('canvas')
       const MAX = 1600
-      let { width, height } = img
-      if (width > MAX || height > MAX) {
-        if (width > height) { height = Math.round(height * MAX / width); width = MAX }
-        else { width = Math.round(width * MAX / height); height = MAX }
+      let { width: w, height: h } = img
+      if (w > MAX || h > MAX) {
+        if (w > h) { h = Math.round(h * MAX / w); w = MAX }
+        else { w = Math.round(w * MAX / h); h = MAX }
       }
-      canvas.width = width; canvas.height = height
-      const ctx = canvas.getContext('2d')!
-      ctx.filter = 'contrast(1.4) brightness(1.05) grayscale(1)'
-      ctx.drawImage(img, 0, 0, width, height)
-      resolve(canvas.toDataURL('image/jpeg', 0.92))
+      c.width = w; c.height = h
+      const ctx = c.getContext('2d')!
+      ctx.filter = 'contrast(1.3) brightness(1.05)'
+      ctx.drawImage(img, 0, 0, w, h)
+      resolve(c.toDataURL('image/jpeg', 0.9))
     }
     img.onerror = reject
     img.src = url
@@ -38,155 +38,126 @@ export async function compressImage(file: File): Promise<string> {
 }
 
 // ─── Phone normalisation ──────────────────────────────────────────────────────
-// Rules (in priority order):
-//  1. Full intl number with +: keep as-is after cleaning
-//  2. Starts with 00: strip 00, add +
-//  3. 10+ digit string starting with country code digits: add +
-//  4. Exactly 8 digits (local only): add default country code +974
-//  5. Anything else with 8-14 digits: treat as local, add +974
+//
+// 99% of bills are Qatar (+974). Common OCR errors:
+//   "+974..." → OCR reads "+" as "0", "8", "B", "l" etc.
+//   "+97450100084" → captured as "097450100084", "897450100084"
+//
+// Strategy:
+//  1. Strip parens/spaces
+//  2. Extract all digit characters
+//  3. If digits look like "974" + 8 digits (with any 1-char OCR noise in front) → Qatar
+//  4. If exactly 8 digits → Qatar default
+//  5. Generic international fallback
 
-const DEFAULT_COUNTRY_CODE = '+974'
+function normalisePhone(raw: string): { code: string; local: string; full: string } | null {
+  // Remove formatting chars but preserve + for detection
+  const stripped = raw.replace(/[().\s\-]/g, '')
+  const digits = stripped.replace(/\D/g, '')
 
-function normalisePhone(raw: string): string | null {
-  // Remove parens, spaces, dashes but keep leading +
-  const s = raw.replace(/[()]/g, '').replace(/[\s\-]/g, '').trim()
-  if (!s) return null
+  if (!digits || digits.length < 8) return null
 
-  let digits = s.replace(/\D/g, '')
-  const hasPlus = s.startsWith('+')
+  // ── Qatar patterns ────────────────────────────────────────────────────────
 
-  // Rule 1: has + prefix
-  if (hasPlus) {
-    if (digits.length >= 9 && digits.length <= 15) return '+' + digits
-    return null
+  // Pattern: exactly 8 digits (no country code) → default +974
+  if (digits.length === 8) {
+    return { code: '+974', local: digits, full: '+974' + digits }
   }
 
-  // Rule 2: starts with 00 (intl prefix)
-  if (s.startsWith('00') && digits.length >= 11) return '+' + digits.slice(2)
+  // Pattern: "974" + 8 digits = 11 digits → +974XXXXXXXX (clean)
+  if (digits.startsWith('974') && digits.length === 11) {
+    return { code: '+974', local: digits.slice(3), full: '+' + digits }
+  }
 
-  // Rule 3: 11-15 digits starting with a known country prefix (974, 966, 971, etc.)
-  if (digits.length >= 11 && digits.length <= 15) return '+' + digits
+  // Pattern: [1 junk char] + "974" + 8 digits = 12 digits
+  // Handles OCR misread of "+" as "0", "8", "B→8", "l→1", etc.
+  if (digits.length === 12 && digits.slice(1).startsWith('974')) {
+    const local = digits.slice(4) // skip junk + "974"
+    return { code: '+974', local, full: '+974' + local }
+  }
 
-  // Rule 4: exactly 8 digits — local number, prepend default country code
-  if (digits.length === 8) return DEFAULT_COUNTRY_CODE + digits
+  // Pattern: "+974" + 8 digits (already correct, 12 total with +)
+  if (stripped.startsWith('+974') && digits.length === 11) {
+    return { code: '+974', local: digits.slice(3), full: '+974' + digits.slice(3) }
+  }
 
-  // Rule 5: 9-10 digits — could be local with extra digit, prepend country code
-  if (digits.length >= 9 && digits.length <= 10) return DEFAULT_COUNTRY_CODE + digits
+  // ── Generic international ─────────────────────────────────────────────────
+
+  // 9-15 digits: last 8 = local, rest = country code
+  if (digits.length >= 9 && digits.length <= 15) {
+    const local = digits.slice(-8)
+    const codeD = digits.slice(0, digits.length - 8)
+    if (codeD.length >= 1 && codeD.length <= 4) {
+      return { code: '+' + codeD, local, full: '+' + codeD + local }
+    }
+  }
 
   return null
 }
 
-// Split a normalised full number (+CCCLLLLLLLL) into code and local parts
-function splitFull(full: string): { code: string; local: string } {
-  if (!full.startsWith('+')) return { code: DEFAULT_COUNTRY_CODE, local: full }
-  const digits = full.slice(1)
-  // Last 8 digits = local, rest = country code
-  if (digits.length > 8) {
-    return { code: '+' + digits.slice(0, digits.length - 8), local: digits.slice(-8) }
-  }
-  return { code: DEFAULT_COUNTRY_CODE, local: digits }
-}
-
-// ─── Extract phone from OCR text ─────────────────────────────────────────────
-// Handles all bill formats observed:
-//   Snoonu:  "Customer Phone: +97451118518" or "+66915444" or "66915444"
-//   Rafeeq:  "Mobile number (الهاتف) :\n(+974) 55575759"
-//             "Phone Number : (+974) 50306006"
-//   Hurrier: "TEL: +97455985888"
-//   Izghawa: phone on line after customer name (no label)
-
-function extractPhone(text: string): string | null {
+// ─── Phone finder ─────────────────────────────────────────────────────────────
+function findPhone(text: string): { code: string; local: string; full: string } | null {
   const lines = text.split('\n').map(l => l.trim())
 
-  // Phone field labels — all formats seen
-  const PHONE_LABEL = /customer\s*phone|mobile\s*number|mobile\s*no|phone\s*number|phone\s*no|\btel\b|telephone|contact\s*phone|هاتف|جوال|الهاتف|رقم الهاتف/i
+  // Label patterns from real bills
+  const LABEL = /customer\s*phone|mobile\s*number|mobile\s*no|phone\s*number|phone\s*no|^tel[\s:]+|هاتف|الهاتف|رقم الهاتف/i
+  const TOKEN = /(\(?\+?[\d][().\d\s\-]{6,17})/g
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
-    if (!PHONE_LABEL.test(line)) continue
-
-    // Try extracting number from SAME line (after label / colon)
-    // e.g. "Customer Phone: +97451118518" or "Customer Phone: 66915444"
-    const afterColon = line.replace(/^[^:]+:\s*/, '').trim()
-    if (afterColon) {
-      const n = normalisePhone(afterColon)
-      if (n) return n
+    if (!LABEL.test(lines[i])) continue
+    // Same line tokens
+    for (const m of (lines[i].match(TOKEN) || [])) {
+      const p = normalisePhone(m)
+      if (p) return p
     }
-
-    // Try next line (Rafeeq format — label on one line, number on next)
-    if (i + 1 < lines.length) {
-      const n = normalisePhone(lines[i + 1])
-      if (n) return n
-    }
-
-    // Try extracting any number-like token from the label line itself
-    const tokens = line.split(/\s+/)
-    for (const tok of tokens) {
-      if (/[\d+]/.test(tok)) {
-        const n = normalisePhone(tok)
-        if (n) return n
+    // Next 1-2 lines
+    for (let j = i + 1; j <= i + 2 && j < lines.length; j++) {
+      for (const m of (lines[j].match(TOKEN) || [])) {
+        const p = normalisePhone(m)
+        if (p) return p
       }
     }
   }
 
-  // Fallback: scan all lines for a standalone phone number
-  // Prioritise lines with + prefix or that look like intl numbers
+  // Fallback: (+974) XXXXXXXX
+  const paren = text.replace(/\n/g, ' ').match(/\(\+?\d{1,4}\)\s*\d{6,10}/g) || []
+  for (const m of paren) { const p = normalisePhone(m); if (p) return p }
+
+  // Fallback: +XXXXXXXXX anywhere
+  const plus = text.match(/\+\d{8,14}/g) || []
+  for (const m of plus) { const p = normalisePhone(m); if (p) return p }
+
+  // Fallback: standalone 8-digit line
   for (const line of lines) {
-    // Skip lines that are clearly order numbers (7-8 digit sequences without + not matching phone pattern)
-    if (/^order|^رقم الطلب/i.test(line)) continue
-
-    // Look for (+974) XXXXXXXX format (Rafeeq)
-    const parenMatch = line.match(/\(\+(\d{1,4})\)\s*(\d{6,10})/)
-    if (parenMatch) {
-      const n = normalisePhone(`+${parenMatch[1]}${parenMatch[2]}`)
-      if (n) return n
-    }
-
-    // +XXXXXXXXXXX (any intl number)
-    const plusMatch = line.match(/\+\d{8,14}/)
-    if (plusMatch) {
-      const n = normalisePhone(plusMatch[0])
-      if (n) return n
-    }
-
-    // Standalone 8-digit local number on its own line
-    if (/^\d{8}$/.test(line)) {
-      const n = normalisePhone(line)
-      if (n) return n
-    }
+    if (/^\d{8}$/.test(line)) return { code: '+974', local: line, full: '+974' + line }
   }
-
-  // Last resort: any 8+ digit sequence
-  const numMatch = text.match(/\b(\d{8,14})\b/)
-  if (numMatch) return normalisePhone(numMatch[1])
 
   return null
 }
 
-// ─── Delivery partner detection ───────────────────────────────────────────────
-function extractPartner(text: string): string {
-  const map = [
-    [/snoonu/i, 'Snoonu'],
-    [/rafeeq|رفيق/i, 'Rafeeq'],
-    [/hurrier/i, 'Hurrier'],
-    [/talabat/i, 'Talabat'],
-    [/hungerstation/i, 'HungerStation'],
-    [/jahez/i, 'Jahez'],
-    [/careem/i, 'Careem'],
-    [/noon\s*food/i, 'Noon Food'],
-    [/marsool/i, 'Marsool'],
-    [/zomato/i, 'Zomato'],
-    [/deliveroo/i, 'Deliveroo'],
-  ] as [RegExp, string][]
-  for (const [re, name] of map) if (re.test(text)) return name
+// ─── Name finder ──────────────────────────────────────────────────────────────
+function findName(text: string): string {
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^customer[\s(:]/i.test(lines[i])) continue
+    const after = lines[i].replace(/^.*?:\s*/i, '').trim()
+    if (isName(after)) return after
+    if (i + 1 < lines.length && isName(lines[i + 1])) return lines[i + 1]
+  }
+  // Hurrier: name line before TEL:
+  for (let i = 1; i < lines.length; i++) {
+    if (/^tel[\s:]/i.test(lines[i]) && isName(lines[i - 1])) return lines[i - 1]
+  }
   return ''
 }
 
-// ─── Order number detection ───────────────────────────────────────────────────
-function extractOrderNumber(text: string): string {
-  const lines = text.split('\n').map(l => l.trim())
+function isName(s: string): boolean {
+  return !!(s && s.length >= 2 && s.length < 80 && !/^\d/.test(s) && !/^\+/.test(s) &&
+    !/^(customer|mobile|phone|tel|order|delivery|العميل|هاتف|pickup)/i.test(s))
+}
 
-  // "Order Number" heading → next pure-digit line
+function findOrderNumber(text: string): string {
+  const lines = text.split('\n').map(l => l.trim())
   for (let i = 0; i < lines.length; i++) {
     if (/order\s*(number|no\.?|#)/i.test(lines[i]) || /رقم الطلب/i.test(lines[i])) {
       for (let j = i + 1; j <= i + 4 && j < lines.length; j++) {
@@ -194,60 +165,70 @@ function extractOrderNumber(text: string): string {
       }
     }
   }
-  // "#6970" or "Order #697514"
-  const h = text.match(/order\s*#\s*(\d{4,15})|#\s*(\d{4,10})\b/i)
-  if (h) return h[1] || h[2]
-  // Order No. → number
-  const no = text.match(/order\s*no\.?\s*\n[\s\S]{0,40}?\n\s*(\d{5,15})/i)
-  if (no) return no[1]
+  const inline = text.match(/order\s*#\s*(\d{4,15})/i)
+  if (inline) return inline[1]
   return ''
 }
 
-function extractDate(text: string): string {
+function findPartner(text: string): string {
+  const map = [
+    { n: 'Snoonu', r: /snoonu/i },
+    { n: 'Rafeeq', r: /rafeeq/i },
+    { n: 'Hurrier', r: /hurrier/i },
+    { n: 'Talabat', r: /talabat/i },
+    { n: 'HungerStation', r: /hungerstation/i },
+    { n: 'Jahez', r: /jahez/i },
+    { n: 'Careem', r: /careem/i },
+    { n: 'Noon Food', r: /noon\s*food/i },
+    { n: 'Marsool', r: /marsool/i },
+  ]
+  for (const { n, r } of map) { if (r.test(text)) return n }
+  return ''
+}
+
+function findDate(text: string): string {
   const iso = text.match(/\b(\d{4}-\d{2}-\d{2})\b/)
   if (iso) return iso[1]
-  const slash = text.match(/\b(\d{1,2}[\/]\d{1,2}[\/]\d{4})\b/)
-  if (slash) return slash[1]
-  const verbal = text.match(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z\-]*[\s\-]+\d{1,2}[\s,\-]+\d{4}\b/i)
-  if (verbal) return verbal[0]
+  const us = text.match(/\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})\b/)
+  if (us) return us[1]
   return ''
 }
 
-// ─── Main OCR entry point ─────────────────────────────────────────────────────
-export async function performOCR(imageData: string, mode: 'fast' | 'ai' = 'fast'): Promise<OCRResult> {
+export async function performOCR(imageData: string, _mode = 'fast'): Promise<OCRResult> {
   if (!workerReady || !worker) await initTesseractWorker()
   try {
     const { data } = await worker.recognize(imageData)
     const raw: string = data?.text || ''
-    const confidence: number = data?.confidence || 0
-    const fullPhone = extractPhone(raw) || ''
-
+    const p = findPhone(raw)
     return {
-      customerName:    '',          // intentionally empty — user fills manually
-      contactNumber:   fullPhone,
-      billNumber:      extractOrderNumber(raw),
-      billDate:        extractDate(raw),
-      restaurant:      '',
-      address:         '',
-      deliveryPartner: extractPartner(raw),
-      rawText:         raw,
-      confidence,
+      customerName: findName(raw),
+      contactNumber: p?.full || '',
+      billNumber: findOrderNumber(raw),
+      billDate: findDate(raw),
+      restaurant: '',
+      address: '',
+      deliveryPartner: findPartner(raw),
+      rawText: raw,
+      confidence: data?.confidence || 0,
     }
   } catch (e) {
-    console.error('OCR error:', e)
-    return { customerName: '', contactNumber: '', billNumber: '', billDate: '', restaurant: '', address: '', deliveryPartner: '', rawText: '', confidence: 0 }
+    console.error('OCR:', e)
+    return { customerName:'', contactNumber:'', billNumber:'', billDate:'', restaurant:'', address:'', deliveryPartner:'', rawText:'', confidence: 0 }
   }
 }
 
-// ─── Exported helpers ─────────────────────────────────────────────────────────
 export function validateContactNumber(full: string): boolean {
-  if (!full) return false
-  const s = full.replace(/[()]/g, '').replace(/[\s\-]/g, '')
-  return /^\+\d{9,15}$/.test(s)
+  // Rule: +974 (4 chars) + min 8 digits = total min 12 chars
+  // Code is + followed by 2-4 digits; local is min 8 digits
+  const cleaned = full.replace(/[() \-]/g, '')
+  if (!cleaned.startsWith('+')) return false
+  const digits = cleaned.slice(1)
+  if (digits.length < 10) return false  // min: 2 code + 8 local
+  return /^\d+$/.test(digits)
 }
 
 export function splitContactNumber(full: string): { code: string; local: string } {
-  const norm = normalisePhone(full)
-  if (norm) return splitFull(norm)
-  return { code: DEFAULT_COUNTRY_CODE, local: full.replace(/\D/g, '').slice(-8) }
+  const p = normalisePhone(full)
+  if (p) return { code: p.code, local: p.local }
+  return { code: '+974', local: '' }
 }
