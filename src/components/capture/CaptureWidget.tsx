@@ -4,7 +4,7 @@ import { Camera, Edit3, Zap, Brain, RotateCcw, CheckCircle, AlertCircle, Loader2
 import { Button } from '@/components/ui/Button'
 import { Card, CardContent } from '@/components/ui/Card'
 import { toast } from '@/components/ui/Toast'
-import { performOCR, compressImage, validateContactNumber, splitContactNumber, initTesseractWorker } from '@/lib/ocr'
+import { performOCR, compressImage, initTesseractWorker } from '@/lib/ocr'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import type { OCRResult } from '@/types'
@@ -13,250 +13,261 @@ type CaptureMode = 'camera' | 'upload' | 'manual'
 type OCRMode = 'fast' | 'ai'
 type Phase = 'idle' | 'processing' | 'review' | 'success' | 'error'
 
-const emptyForm = { code: '+974', number: '', name: '' }
-const fullContact = (code: string, num: string) => code.trim() + num.replace(/\D/g, '')
-const isValid = (code: string, num: string): boolean => {
-  // Rule: code must be + then 2-4 digits (e.g. +974)
-  // Number must be min 8 digits
-  // Total min: 1(+) + 3(code) + 8(local) = 12 chars for +974
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const join = (code: string, num: string) => code.trim() + num.replace(/\D/g, '')
+
+// Validation: country code = + then 2-4 digits, local = min 8 digits, total ≥ 12
+const valid = (code: string, num: string): boolean => {
   const c = code.trim()
   const n = num.replace(/\D/g, '')
-  if (!/^\+\d{2,4}$/.test(c)) return false
-  return n.length >= 8
+  return /^\+\d{2,4}$/.test(c) && n.length >= 8
 }
 
-// Phone input: editable country code + number
-function PhoneInput({ code, number, onCode, onNum, autoFocus }: {
-  code: string; number: string
+// Parse a raw OCR phone string into { code, local }
+// Handles: +97450100084, 97450100084, 07450100084 (misread +), 66915444 (8 digits)
+function parseOCRPhone(raw: string): { code: string; local: string } {
+  const stripped = raw.replace(/[()[\]\s\-]/g, '')
+  let digits = stripped.replace(/\D/g, '')
+
+  if (!digits) return { code: '+974', local: '' }
+
+  // 8 digits only → Qatar local number
+  if (digits.length === 8) return { code: '+974', local: digits }
+
+  // 11 digits: +974XXXXXXXX
+  if (digits.length === 11) {
+    // Fix OCR misread of '+' sign: +97450100084 read as 07450100084 or 87450100084
+    // If first digit is NOT 9 but positions 2-3 are 74, the first char was misread from '9'
+    if (!digits.startsWith('9') && digits.slice(1, 3) === '74') {
+      digits = '9' + digits.slice(1) // restore the misread '9'
+    }
+    if (digits.startsWith('974')) {
+      return { code: '+974', local: digits.slice(3) }
+    }
+    // Other 11-digit international: last 8 = local, first 3 = code
+    return { code: '+' + digits.slice(0, 3), local: digits.slice(3) }
+  }
+
+  // 10 digits starting with 974 (e.g. 9741234567 — unusual but handle)
+  if (digits.startsWith('974') && digits.length >= 11) {
+    return { code: '+974', local: digits.slice(3) }
+  }
+
+  // 9 digits → treat as Qatar local (some numbers have 9 digits)
+  if (digits.length === 9) return { code: '+974', local: digits }
+
+  // Generic: last 8 digits = local, rest = code
+  if (digits.length >= 9 && digits.length <= 15) {
+    const local = digits.slice(-8)
+    const codeD = digits.slice(0, digits.length - 8)
+    if (codeD.length >= 1 && codeD.length <= 4) {
+      return { code: '+' + codeD, local }
+    }
+  }
+
+  return { code: '+974', local: digits.slice(-8) }
+}
+
+// ── Shared UI components ───────────────────────────────────────────────────────
+
+// Read-only name display (no input = no auto-fill conflict)
+function NameDisplay({ name }: { name: string }) {
+  if (!name) return null
+  return (
+    <div>
+      <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Customer Name (from bill)</p>
+      <div className="px-3 py-2.5 rounded-xl bg-gray-50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-700 text-sm text-gray-900 dark:text-white">
+        {name}
+      </div>
+    </div>
+  )
+}
+
+// Editable phone input: [+974] [41105663]
+function PhoneInput({ code, num, onCode, onNum, autoFocus }: {
+  code: string; num: string
   onCode: (v: string) => void; onNum: (v: string) => void
   autoFocus?: boolean
 }) {
-  const valid = !number || isValid(code, number)
+  const full = join(code, num)
+  const ok = !num || valid(code, num)
   return (
     <div>
-      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+      <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
         Contact Number <span className="text-red-500">*</span>
+        <span className="text-gray-400 font-normal ml-1">(country code + 8 digits)</span>
       </label>
-      <div className={`flex rounded-xl overflow-hidden border transition-colors focus-within:ring-2 focus-within:ring-blue-500 ${!valid && number ? 'border-red-400' : 'border-gray-300 dark:border-gray-600'}`}>
+      <div className={`flex rounded-xl overflow-hidden border transition-all focus-within:ring-2 focus-within:ring-blue-500 ${!ok && num ? 'border-red-400' : 'border-gray-300 dark:border-gray-600'}`}>
         <input
           value={code}
           onChange={e => onCode(e.target.value)}
-          className="w-16 shrink-0 px-2 py-3 text-center text-sm font-mono font-bold bg-gray-50 dark:bg-gray-700 text-gray-800 dark:text-gray-200 border-r border-gray-300 dark:border-gray-600 focus:outline-none"
+          autoComplete="off"
+          className="w-[72px] shrink-0 px-2 py-3 text-center text-sm font-mono font-bold bg-gray-50 dark:bg-gray-700 text-gray-800 dark:text-gray-200 border-r border-gray-300 dark:border-gray-600 focus:outline-none"
           placeholder="+974"
         />
         <input
           type="tel"
-          value={number}
+          value={num}
           autoFocus={autoFocus}
+          autoComplete="off"
           onChange={e => onNum(e.target.value.replace(/\D/g, '').slice(0, 10))}
           placeholder="41105663"
           className="flex-1 px-3 py-3 text-base font-mono bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none"
         />
       </div>
-      {number && (
-        <p className={`text-xs mt-1 ${valid ? 'text-gray-400' : 'text-red-500'}`}>
-          {valid ? `Full number: ${fullContact(code, number)}` : 'Invalid number format'}
+      {num && (
+        <p className={`text-xs mt-1 ${ok ? 'text-gray-400' : 'text-red-500'}`}>
+          {ok ? `Full: ${full}` : `Min 8 digits required (have ${num.replace(/\D/g, '').length})`}
         </p>
       )}
     </div>
   )
 }
 
-function Field({ label, value, onChange, placeholder }: {
-  label: string; value: string; onChange: (v: string) => void; placeholder?: string
-}) {
-  return (
-    <div>
-      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{label}</label>
-      <input type="text" value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder}
-        className="w-full px-3 py-2.5 rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
-    </div>
-  )
-}
-
-
-// Read-only display — shows OCR-captured name, no editable input
-function ReadOnlyName({ name }: { name: string }) {
-  return (
-    <div>
-      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-        Customer Name <span className="text-xs font-normal text-gray-400">(from bill)</span>
-      </label>
-      <div className="w-full px-3 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700/50 text-sm min-h-[42px] text-gray-900 dark:text-white">
-        {name || <span className="text-gray-400 italic">Not detected on bill</span>}
-      </div>
-    </div>
-  )
-}
+// ── Main component ─────────────────────────────────────────────────────────────
+const empty = { code: '+974', num: '', name: '' }
 
 export function CaptureWidget() {
   const { user } = useAuth()
   const [mode, setMode] = useState<CaptureMode>('camera')
   const [ocrMode, setOcrMode] = useState<OCRMode>('fast')
   const [phase, setPhase] = useState<Phase>('idle')
-  const [ocrResult, setOcrResult] = useState<OCRResult | null>(null)
-  const [errorMsg, setErrorMsg] = useState('')
+  const [ocr, setOcr] = useState<OCRResult | null>(null)
+  const [errMsg, setErrMsg] = useState('')
   const [saving, setSaving] = useState(false)
-  const [form, setForm] = useState(emptyForm)
-  const [cameraActive, setCameraActive] = useState(false)
+  const [form, setForm] = useState(empty)
+  const [camActive, setCamActive] = useState(false)
   const [facing, setFacing] = useState<'environment' | 'user'>('environment')
   const [fullscreen, setFullscreen] = useState(false)
-  const [isDuplicate, setIsDuplicate] = useState(false)
+  const [isDup, setIsDup] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const wasFullscreen = useRef(false)
+  const fileRef = useRef<HTMLInputElement>(null)
+  const wasFull = useRef(false)
 
   useEffect(() => { initTesseractWorker() }, [])
 
-  const startCamera = useCallback(async () => {
+  const startCam = useCallback(async () => {
     try {
       streamRef.current?.getTracks().forEach(t => t.stop())
-      const stream = await navigator.mediaDevices.getUserMedia({
+      const s = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: facing, width: { ideal: 1920 }, height: { ideal: 1080 } }
       })
-      streamRef.current = stream
-      if (videoRef.current) { videoRef.current.srcObject = stream; setCameraActive(true) }
+      streamRef.current = s
+      if (videoRef.current) { videoRef.current.srcObject = s; setCamActive(true) }
     } catch { toast('error', 'Camera access denied') }
   }, [facing])
 
-  const stopCamera = useCallback(() => {
+  const stopCam = useCallback(() => {
     streamRef.current?.getTracks().forEach(t => t.stop())
-    streamRef.current = null; setCameraActive(false)
+    streamRef.current = null; setCamActive(false)
   }, [])
 
-  // Camera lifecycle
   useEffect(() => {
-    const needCamera = mode === 'camera' && phase === 'idle'
-    if (needCamera) startCamera()
-    else stopCamera()
-    return () => stopCamera()
-  }, [mode, phase, startCamera, stopCamera])
+    if (mode === 'camera' && phase === 'idle' && !fullscreen) startCam()
+    else stopCam()
+    return () => stopCam()
+  }, [mode, phase, fullscreen, startCam, stopCam])
 
-  // Also start camera when entering fullscreen
   useEffect(() => {
-    if (fullscreen && mode === 'camera' && phase === 'idle') startCamera()
-  }, [fullscreen, mode, phase, startCamera])
+    if (fullscreen && mode === 'camera' && phase === 'idle') startCam()
+  }, [fullscreen, mode, phase, startCam])
 
-  const resetAll = useCallback((restoreFullscreen = false) => {
-    setPhase('idle'); setOcrResult(null); setErrorMsg('')
-    setForm(emptyForm); setSaving(false); setIsDuplicate(false)
-    if (restoreFullscreen) setTimeout(() => setFullscreen(true), 150)
+  const reset = useCallback((restoreFs = false) => {
+    setPhase('idle'); setOcr(null); setErrMsg('')
+    setForm(empty); setSaving(false); setIsDup(false)
+    if (restoreFs) setTimeout(() => setFullscreen(true), 150)
   }, [])
 
-  // Core save function - simplified, no FK joins
-  const doSave = useCallback(async (f: typeof emptyForm, result?: OCRResult) => {
-    const contact = fullContact(f.code, f.number)
-    if (!f.number || !isValid(f.code, f.number)) {
-      toast('error', 'Enter a valid contact number first'); return
-    }
+  const save = useCallback(async (f: typeof empty, result?: OCRResult) => {
+    const contact = join(f.code, f.num)
+    if (!f.num || !valid(f.code, f.num)) { toast('error', 'Valid contact number required'); return }
     if (!user?.id) { toast('error', 'Not logged in'); return }
-
     setSaving(true)
     try {
-      // Check duplicate
-      const { count } = await supabase
-        .from('bill_records')
-        .select('id', { count: 'exact', head: true })
-        .eq('contact_number', contact)
-      setIsDuplicate((count ?? 0) > 0)
+      const { count } = await supabase.from('bill_records')
+        .select('id', { count: 'exact', head: true }).eq('contact_number', contact)
+      setIsDup((count ?? 0) > 0)
 
-      // INSERT — no .select().single() to avoid extra RLS check
-      const { error: insertError } = await supabase
-        .from('bill_records')
-        .insert({
-          user_id: user.id,
-          contact_number: contact,
-          customer_name: f.name.trim() || null,
-          bill_number: null,
-          raw_text: result?.rawText?.slice(0, 2000) || '',
-          ocr_confidence: result?.confidence || 0,
-          source: mode === 'manual' ? 'manual' : mode,
-          ocr_mode: mode === 'manual' ? 'manual' : ocrMode,
-          status: 'success',
-        })
-
-      if (insertError) {
-        console.error('Insert error:', JSON.stringify(insertError))
-        throw new Error(insertError.message || insertError.code || 'Insert failed')
-      }
-
-      // Log scan (fire and forget)
-      supabase.from('scan_logs').insert({
+      const { error } = await supabase.from('bill_records').insert({
         user_id: user.id,
-        status: 'success',
-        ocr_mode: mode === 'manual' ? 'manual' : ocrMode,
-        source: mode,
+        contact_number: contact,
+        customer_name: f.name.trim() || null,
+        bill_number: result?.billNumber?.trim() || null,
+        raw_text: result?.rawText?.slice(0, 2000) || '',
         ocr_confidence: result?.confidence || 0,
-      }).then(() => {})
+        delivery_partner: result?.deliveryPartner || null,
+        source: mode === 'manual' ? 'manual' : mode,
+        ocr_mode: mode === 'manual' ? 'manual' : ocrMode,
+        status: 'success',
+      })
+      if (error) throw new Error(error.message || error.code)
+
+      supabase.from('scan_logs').insert({
+        user_id: user.id, status: 'success',
+        ocr_mode: mode === 'manual' ? 'manual' : ocrMode,
+        source: mode, ocr_confidence: result?.confidence || 0,
+      })
 
       setPhase('success')
-      const shouldRestoreFs = wasFullscreen.current && mode === 'camera'
-      setTimeout(() => resetAll(shouldRestoreFs), 2000)
+      const restoreFs = wasFull.current && mode === 'camera'
+      setTimeout(() => reset(restoreFs), 2000)
     } catch (e: any) {
-      const msg = e?.message || String(e) || 'Unknown error'
-      console.error('Save failed:', msg)
-      toast('error', `Save failed: ${msg}`)
+      toast('error', `Save failed: ${e?.message || 'Please try again'}`)
       setPhase(mode === 'manual' ? 'idle' : 'review')
-    } finally {
-      setSaving(false)
-    }
-  }, [user, mode, ocrMode, resetAll])
+    } finally { setSaving(false) }
+  }, [user, mode, ocrMode, reset])
 
   const runOCR = useCallback(async (imageData: string) => {
     setPhase('processing')
     try {
       const result = await performOCR(imageData, ocrMode)
-      setOcrResult(result)
-      // Parse contact number using helper (handles +974XXXXXXXX, +94XXXXXXXX, etc.)
-      const { code, local } = splitContactNumber(result.contactNumber || '')
-      const f = { code, number: local, name: '' }
+      setOcr(result)
+      // Parse phone — handles OCR misreads of + sign
+      const { code, local } = parseOCRPhone(result.contactNumber || '')
+      const f = { code, num: local, name: result.customerName || '' }
       setForm(f)
-      if (!local || !isValid(code, local)) {
-        setErrorMsg('Contact number not found. Edit manually or retake.')
+      if (!local || !valid(code, local)) {
+        setErrMsg('Contact number not detected — enter manually or retake.')
         setPhase('error')
       } else {
         setPhase('review')
-        // Manual save required — user must press Save
+        // No auto-save — user must press Save
       }
-    } catch (err) {
-      console.error('OCR error:', err)
-      setErrorMsg('OCR processing failed. Enter manually or retake.')
+    } catch {
+      setErrMsg('OCR failed — retake or enter manually.')
       setPhase('error')
     }
-  }, [ocrMode, doSave])
+  }, [ocrMode])
 
   const capture = useCallback(() => {
-    if (!videoRef.current || !cameraActive) return
-    wasFullscreen.current = fullscreen
-    const canvas = document.createElement('canvas')
-    canvas.width = videoRef.current.videoWidth
-    canvas.height = videoRef.current.videoHeight
-    canvas.getContext('2d')!.drawImage(videoRef.current, 0, 0)
-    setFullscreen(false)
-    stopCamera()
-    runOCR(canvas.toDataURL('image/jpeg', 0.9))
-  }, [cameraActive, fullscreen, stopCamera, runOCR])
+    if (!videoRef.current || !camActive) return
+    wasFull.current = fullscreen
+    const c = document.createElement('canvas')
+    c.width = videoRef.current.videoWidth; c.height = videoRef.current.videoHeight
+    c.getContext('2d')!.drawImage(videoRef.current, 0, 0)
+    setFullscreen(false); stopCam()
+    runOCR(c.toDataURL('image/jpeg', 0.9))
+  }, [camActive, fullscreen, stopCam, runOCR])
 
   const handleFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return
     try { await runOCR(await compressImage(file)) }
     catch { toast('error', 'Failed to read image') }
-    if (fileInputRef.current) fileInputRef.current.value = ''
+    if (fileRef.current) fileRef.current.value = ''
   }, [runOCR])
 
-  const retake = () => { resetAll(); if (mode === 'camera') startCamera() }
-  const canSave = isValid(form.code, form.number)
+  const retake = () => { reset(); if (mode === 'camera') startCam() }
+  const canSave = valid(form.code, form.num)
 
-  // ── FULLSCREEN CAMERA ─────────────────────────────────────
+  // ── FULLSCREEN ─────────────────────────────────────────────────────────────
   if (fullscreen && mode === 'camera') return (
     <div className="fixed inset-0 z-50 bg-black flex flex-col">
-      {/* Camera feed always shown in background */}
       <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-cover" />
 
-      {/* Scan guide overlay */}
+      {/* Scan guide */}
       {phase === 'idle' && (
-        <div className="absolute inset-x-6 top-1/4 bottom-1/4 border-2 border-white/50 rounded-2xl pointer-events-none">
+        <div className="absolute inset-x-6 top-[20%] bottom-[20%] border-2 border-white/50 rounded-2xl pointer-events-none">
           <div className="absolute top-0 inset-x-0 h-0.5 bg-blue-400 scanner-line" />
         </div>
       )}
@@ -265,58 +276,86 @@ export function CaptureWidget() {
       <div className="absolute top-4 right-4 flex gap-2 z-10">
         <button onClick={() => setFacing(f => f === 'environment' ? 'user' : 'environment')}
           className="bg-black/60 p-3 rounded-full text-white"><FlipHorizontal className="h-5 w-5" /></button>
-        <button onClick={() => { setFullscreen(false); wasFullscreen.current = false }}
+        <button onClick={() => { setFullscreen(false); wasFull.current = false }}
           className="bg-black/60 p-3 rounded-full text-white"><Minimize2 className="h-5 w-5" /></button>
       </div>
 
-      {/* Processing overlay */}
+      {/* Processing */}
       {phase === 'processing' && (
-        <div className="absolute inset-0 bg-black/75 flex flex-col items-center justify-center gap-4 z-10">
+        <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center gap-4 z-10">
           <div className="relative w-16 h-16">
-            <div className="absolute inset-0 rounded-full border-4 border-blue-900/40" />
+            <div className="absolute inset-0 rounded-full border-4 border-blue-900" />
             <div className="absolute inset-0 rounded-full border-4 border-blue-500 border-t-transparent animate-spin" />
           </div>
-          <p className="text-white font-semibold">Reading bill...</p>
+          <p className="text-white font-semibold text-lg">Reading bill...</p>
         </div>
       )}
 
-      {/* Success overlay */}
+      {/* Success */}
       {phase === 'success' && (
         <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center gap-3 z-10">
           <div className="w-20 h-20 bg-green-500/20 rounded-full flex items-center justify-center">
             <CheckCircle className="h-10 w-10 text-green-400" />
           </div>
           <p className="text-white font-bold text-2xl">Saved!</p>
-          {isDuplicate && <span className="text-xs text-amber-400 bg-amber-900/30 px-3 py-1 rounded-full">⚠️ Duplicate contact</span>}
-          <p className="text-gray-400 text-sm font-mono">{fullContact(form.code, form.number)}</p>
-          <p className="text-gray-500 text-xs">Restarting camera...</p>
+          {isDup && <span className="text-xs text-amber-400 bg-amber-900/30 px-3 py-1 rounded-full">⚠️ Duplicate</span>}
+          <p className="text-gray-300 font-mono text-sm">{join(form.code, form.num)}</p>
+          <p className="text-gray-500 text-xs mt-1">Restarting camera...</p>
         </div>
       )}
 
-      {/* Review / Error overlay */}
+      {/* Review / Error — ONLY name display + contact input — NO Bill Number */}
       {(phase === 'review' || phase === 'error') && (
         <div className="absolute inset-0 bg-black/90 z-10 overflow-y-auto">
           <div className="min-h-full flex items-start justify-center p-4 pt-10">
             <div className="w-full max-w-sm bg-gray-900 border border-gray-700 rounded-2xl p-5 space-y-4">
               <div className="flex items-center gap-2">
                 {phase === 'error'
-                  ? <AlertCircle className="h-5 w-5 text-red-400 shrink-0" />
-                  : <CheckCircle className="h-5 w-5 text-green-400 shrink-0" />}
+                  ? <AlertCircle className="h-5 w-5 text-red-400" />
+                  : <CheckCircle className="h-5 w-5 text-green-400" />}
                 <span className="text-white font-semibold">
                   {phase === 'error' ? 'Not detected — enter manually' : 'Review & Save'}
                 </span>
               </div>
-              {phase === 'error' && <p className="text-gray-500 text-xs">{errorMsg}</p>}
-              <PhoneInput code={form.code} number={form.number}
-                onCode={v => setForm(f => ({ ...f, code: v }))} onNum={v => setForm(f => ({ ...f, number: v }))} autoFocus />
-              <ReadOnlyName name={form.name} />
+              {phase === 'error' && <p className="text-gray-500 text-xs">{errMsg}</p>}
+
+              {/* Customer Name: display only — NO input field */}
+              {form.name ? (
+                <div>
+                  <p className="text-xs font-medium text-gray-500 mb-1">Customer Name (from bill)</p>
+                  <div className="px-3 py-2 bg-gray-800 rounded-lg text-gray-300 text-sm">{form.name}</div>
+                </div>
+              ) : null}
+
+              {/* Contact Number: editable */}
+              <div>
+                <label className="block text-xs font-medium text-gray-400 mb-1">
+                  Contact Number <span className="text-red-400">*</span>
+                </label>
+                <div className={`flex rounded-xl overflow-hidden border ${canSave ? 'border-gray-600' : 'border-red-600'} focus-within:border-blue-500`}>
+                  <input value={form.code} onChange={e => setForm(f => ({ ...f, code: e.target.value }))}
+                    autoComplete="off"
+                    className="w-[72px] px-2 py-2.5 text-center text-sm font-mono font-bold bg-gray-700 text-white border-r border-gray-600 focus:outline-none" />
+                  <input type="tel" value={form.num} autoFocus={phase === 'error'}
+                    autoComplete="off"
+                    onChange={e => setForm(f => ({ ...f, num: e.target.value.replace(/\D/g, '').slice(0, 10) }))}
+                    placeholder="41105663"
+                    className="flex-1 px-3 py-2.5 text-base font-mono bg-gray-800 text-white focus:outline-none" />
+                </div>
+                {form.num && (
+                  <p className={`text-xs mt-1 ${canSave ? 'text-gray-500' : 'text-red-400'}`}>
+                    {canSave ? `Full: ${join(form.code, form.num)}` : `Min 8 digits required (${form.num.length} entered)`}
+                  </p>
+                )}
+              </div>
+
               <div className="flex gap-2 pt-1">
-                <button onClick={() => { wasFullscreen.current = true; resetAll(true) }}
-                  className="flex-1 py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-xl text-sm font-medium flex items-center justify-center gap-1.5 transition-colors">
+                <button onClick={() => { wasFull.current = true; reset(true) }}
+                  className="flex-1 py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-xl text-sm font-medium flex items-center justify-center gap-1.5">
                   <RotateCcw className="h-4 w-4" /> Retake
                 </button>
-                <button onClick={() => doSave(form, ocrResult || undefined)} disabled={!canSave || saving}
-                  className={`flex-1 py-3 rounded-xl text-sm font-medium flex items-center justify-center gap-1.5 transition-colors ${canSave && !saving ? 'bg-blue-600 hover:bg-blue-500 text-white' : 'bg-gray-700 text-gray-500 cursor-not-allowed'}`}>
+                <button onClick={() => save(form, ocr || undefined)} disabled={!canSave || saving}
+                  className={`flex-1 py-3 rounded-xl text-sm font-medium flex items-center justify-center gap-1.5 ${canSave && !saving ? 'bg-blue-600 hover:bg-blue-500 text-white' : 'bg-gray-700 text-gray-500 cursor-not-allowed'}`}>
                   {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                   Save
                 </button>
@@ -329,7 +368,7 @@ export function CaptureWidget() {
       {/* Capture button */}
       {phase === 'idle' && (
         <div className="absolute bottom-0 inset-x-0 p-6 bg-gradient-to-t from-black/70 z-10">
-          <button onClick={capture} disabled={!cameraActive}
+          <button onClick={capture} disabled={!camActive}
             className="w-full bg-blue-600 disabled:bg-gray-700 text-white py-4 rounded-2xl text-lg font-semibold active:scale-95 transition-all">
             📷 Capture Bill
           </button>
@@ -338,27 +377,27 @@ export function CaptureWidget() {
     </div>
   )
 
-  // ── NORMAL VIEW ────────────────────────────────────────────
+  // ── NORMAL VIEW ────────────────────────────────────────────────────────────
   return (
     <div className="w-full max-w-lg mx-auto">
-      {/* Mode tabs */}
+      {/* Tabs */}
       <div className="flex gap-1 mb-4 bg-gray-100 dark:bg-gray-800 p-1 rounded-xl">
         {(['camera', 'upload', 'manual'] as CaptureMode[]).map(m => (
-          <button key={m} onClick={() => { setMode(m); resetAll() }}
+          <button key={m} onClick={() => { setMode(m); reset() }}
             className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${mode === m ? 'bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400 shadow-sm' : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}`}>
             {m === 'camera' ? '📷 Camera' : m === 'upload' ? '📁 Upload' : '✏️ Entry'}
           </button>
         ))}
       </div>
 
-      {/* OCR mode toggle */}
+      {/* OCR mode */}
       {mode !== 'manual' && (
         <div className="flex items-center gap-3 mb-4 p-3 bg-gray-50 dark:bg-gray-700/40 rounded-xl border border-gray-200 dark:border-gray-700">
           <Zap className="h-4 w-4 text-blue-500 shrink-0" />
           <span className="text-sm text-gray-600 dark:text-gray-400 flex-1">OCR Mode</span>
           <button onClick={() => setOcrMode(m => m === 'fast' ? 'ai' : 'fast')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${ocrMode === 'ai' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'}`}>
-            {ocrMode === 'ai' ? <><Brain className="h-3.5 w-3.5" />AI Enhanced</> : <><Zap className="h-3.5 w-3.5" />Fast</>}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold ${ocrMode === 'ai' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'}`}>
+            {ocrMode === 'ai' ? <><Brain className="h-3.5 w-3.5" />AI</> : <><Zap className="h-3.5 w-3.5" />Fast</>}
           </button>
         </div>
       )}
@@ -368,11 +407,7 @@ export function CaptureWidget() {
         <Card><CardContent className="p-0 overflow-hidden rounded-xl">
           <div className="relative bg-black" style={{ aspectRatio: '4/3' }}>
             <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
-            {!cameraActive && (
-              <div className="absolute inset-0 flex items-center justify-center bg-black/70 text-white">
-                <div className="text-center"><Loader2 className="h-8 w-8 animate-spin mx-auto mb-2" /><p className="text-sm">Starting camera...</p></div>
-              </div>
-            )}
+            {!camActive && <div className="absolute inset-0 flex items-center justify-center bg-black/70 text-white"><div className="text-center"><Loader2 className="h-8 w-8 animate-spin mx-auto mb-2" /><p className="text-sm">Starting camera...</p></div></div>}
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
               <div className="w-4/5 h-3/4 border-2 border-white/40 rounded-xl border-dashed">
                 <div className="absolute top-0 inset-x-0 h-0.5 bg-blue-400/80 scanner-line" />
@@ -380,14 +415,12 @@ export function CaptureWidget() {
             </div>
             <div className="absolute top-3 right-3 flex gap-2">
               <button onClick={() => setFacing(f => f === 'environment' ? 'user' : 'environment')} className="bg-black/60 p-2 rounded-full text-white"><FlipHorizontal className="h-4 w-4" /></button>
-              <button onClick={() => { wasFullscreen.current = true; setFullscreen(true) }} className="bg-black/60 p-2 rounded-full text-white"><Maximize2 className="h-4 w-4" /></button>
+              <button onClick={() => { wasFull.current = true; setFullscreen(true) }} className="bg-black/60 p-2 rounded-full text-white"><Maximize2 className="h-4 w-4" /></button>
             </div>
           </div>
           <div className="p-4 space-y-2">
-            <Button onClick={capture} className="w-full" size="lg" disabled={!cameraActive}><Camera className="h-5 w-5" />Capture Bill</Button>
-            <button onClick={() => { wasFullscreen.current = true; setFullscreen(true) }} className="w-full py-1.5 text-xs text-blue-600 dark:text-blue-400 font-medium flex items-center justify-center gap-1">
-              <Maximize2 className="h-3 w-3" />Open Fullscreen
-            </button>
+            <Button onClick={capture} className="w-full" size="lg" disabled={!camActive}><Camera className="h-5 w-5" />Capture Bill</Button>
+            <button onClick={() => { wasFull.current = true; setFullscreen(true) }} className="w-full py-1.5 text-xs text-blue-600 dark:text-blue-400 font-medium flex items-center justify-center gap-1"><Maximize2 className="h-3 w-3" />Open Fullscreen</button>
           </div>
         </CardContent></Card>
       )}
@@ -395,12 +428,12 @@ export function CaptureWidget() {
       {/* UPLOAD IDLE */}
       {mode === 'upload' && phase === 'idle' && (
         <Card><CardContent>
-          <div onClick={() => fileInputRef.current?.click()}
+          <div onClick={() => fileRef.current?.click()}
             className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-xl p-10 flex flex-col items-center gap-3 cursor-pointer hover:border-blue-500 hover:bg-blue-50/40 dark:hover:bg-blue-900/10 transition-all">
             <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-full"><Upload className="h-7 w-7 text-blue-500" /></div>
             <div className="text-center"><p className="font-semibold text-gray-900 dark:text-white">Tap to upload bill</p><p className="text-xs text-gray-500 mt-1">JPG, PNG — auto-compressed</p></div>
           </div>
-          <input ref={fileInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFile} />
+          <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFile} />
         </CardContent></Card>
       )}
 
@@ -418,20 +451,20 @@ export function CaptureWidget() {
         </CardContent></Card>
       )}
 
-      {/* REVIEW */}
+      {/* REVIEW — only Name (read-only) + Contact — NO BILL NUMBER */}
       {phase === 'review' && (
         <Card><CardContent>
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2"><CheckCircle className="h-5 w-5 text-green-500" /><span className="font-semibold text-gray-900 dark:text-white">Review & Save</span></div>
-            {saving && <div className="flex items-center gap-1 text-xs text-blue-500"><Loader2 className="h-3.5 w-3.5 animate-spin" />Saving...</div>}
+            {saving && <span className="text-xs text-blue-500 flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" />Saving...</span>}
           </div>
           <div className="space-y-3">
-            <ReadOnlyName name={form.name} />
-            <PhoneInput code={form.code} number={form.number} onCode={v => setForm(f => ({ ...f, code: v }))} onNum={v => setForm(f => ({ ...f, number: v }))} />
+            <NameDisplay name={form.name} />
+            <PhoneInput code={form.code} num={form.num} onCode={v => setForm(f => ({ ...f, code: v }))} onNum={v => setForm(f => ({ ...f, num: v }))} />
           </div>
           <div className="flex gap-2 mt-4">
             <Button variant="outline" onClick={retake} className="flex-1" disabled={saving}><RotateCcw className="h-4 w-4" />Retake</Button>
-            <Button onClick={() => doSave(form, ocrResult || undefined)} loading={saving} disabled={!canSave} className="flex-1">Save</Button>
+            <Button onClick={() => save(form, ocr || undefined)} loading={saving} disabled={!canSave} className="flex-1">Save Record</Button>
           </div>
         </CardContent></Card>
       )}
@@ -442,39 +475,44 @@ export function CaptureWidget() {
           <div className="w-20 h-20 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center"><CheckCircle className="h-10 w-10 text-green-600 dark:text-green-400" /></div>
           <div>
             <p className="font-bold text-2xl text-gray-900 dark:text-white">Saved!</p>
-            {isDuplicate && <span className="inline-block mt-1 text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">⚠️ Duplicate contact</span>}
+            {isDup && <span className="inline-block mt-1 text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">⚠️ Duplicate contact</span>}
             <p className="text-gray-500 text-sm mt-2">Next scan starting...</p>
           </div>
-          <p className="font-mono text-sm text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 px-4 py-2 rounded-lg">{fullContact(form.code, form.number)}</p>
+          <p className="font-mono text-sm text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 px-4 py-2 rounded-lg">{join(form.code, form.num)}</p>
         </CardContent></Card>
       )}
 
-      {/* ERROR */}
+      {/* ERROR — only Name (read-only) + Contact — NO BILL NUMBER */}
       {phase === 'error' && (
         <Card><CardContent className="py-6 flex flex-col items-center gap-4">
           <div className="w-14 h-14 bg-red-100 dark:bg-red-900/30 rounded-full flex items-center justify-center"><AlertCircle className="h-7 w-7 text-red-600 dark:text-red-400" /></div>
-          <div className="text-center"><p className="font-bold text-gray-900 dark:text-white">OCR Failed</p><p className="text-sm text-gray-500">{errorMsg}</p></div>
+          <div className="text-center"><p className="font-bold text-gray-900 dark:text-white">OCR Failed</p><p className="text-sm text-gray-500">{errMsg}</p></div>
           <div className="w-full space-y-3">
-            <ReadOnlyName name={form.name} />
-            <PhoneInput code={form.code} number={form.number} onCode={v => setForm(f => ({ ...f, code: v }))} onNum={v => setForm(f => ({ ...f, number: v }))} autoFocus />
+            <NameDisplay name={form.name} />
+            <PhoneInput code={form.code} num={form.num} onCode={v => setForm(f => ({ ...f, code: v }))} onNum={v => setForm(f => ({ ...f, num: v }))} autoFocus />
           </div>
           <div className="flex gap-2 w-full">
             <Button variant="outline" onClick={retake} className="flex-1"><RotateCcw className="h-4 w-4" />Retake</Button>
-            <Button onClick={() => doSave(form, ocrResult || undefined)} loading={saving} disabled={!canSave} className="flex-1">Save</Button>
+            <Button onClick={() => save(form, ocr || undefined)} loading={saving} disabled={!canSave} className="flex-1">Save</Button>
           </div>
         </CardContent></Card>
       )}
 
-      {/* MANUAL ENTRY */}
+      {/* MANUAL ENTRY — Contact + editable Customer Name — NO BILL NUMBER */}
       {mode === 'manual' && phase === 'idle' && (
         <Card><CardContent>
           <div className="flex items-center gap-2 mb-5"><Edit3 className="h-5 w-5 text-blue-500" /><span className="font-semibold text-gray-900 dark:text-white">Quick Entry</span></div>
           <div className="space-y-4">
-            <PhoneInput code={form.code} number={form.number} onCode={v => setForm(f => ({ ...f, code: v }))} onNum={v => setForm(f => ({ ...f, number: v }))} autoFocus />
-            <Field label="Customer Name" value={form.name} onChange={v => setForm(f => ({ ...f, name: v }))} placeholder="Customer name" />
+            <PhoneInput code={form.code} num={form.num} onCode={v => setForm(f => ({ ...f, code: v }))} onNum={v => setForm(f => ({ ...f, num: v }))} autoFocus />
+            <div>
+              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Customer Name</label>
+              <input type="text" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                placeholder="Customer name" autoComplete="off"
+                className="w-full px-3 py-2.5 rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
           </div>
-          <Button onClick={() => doSave(form)} loading={saving} disabled={!canSave} className="w-full mt-5">Save Record</Button>
-          {!canSave && form.number && <p className="text-xs text-center text-red-500 mt-2">Enter at least 8 digits</p>}
+          <Button onClick={() => save(form)} loading={saving} disabled={!canSave} className="w-full mt-5">Save Record</Button>
+          {!canSave && form.num && <p className="text-xs text-center text-red-500 mt-2">Enter at least 8 digits after country code</p>}
         </CardContent></Card>
       )}
     </div>
