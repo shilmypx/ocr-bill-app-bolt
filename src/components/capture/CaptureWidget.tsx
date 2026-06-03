@@ -71,14 +71,20 @@ function parseOCRPhone(raw: string): { code: string; local: string } {
 // ── Shared UI components ───────────────────────────────────────────────────────
 
 // Read-only name display (no input = no auto-fill conflict)
-function NameDisplay({ name }: { name: string }) {
-  if (!name) return null
+function NameField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
     <div>
-      <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Customer Name (from bill)</p>
-      <div className="px-3 py-2.5 rounded-xl bg-gray-50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-700 text-sm text-gray-900 dark:text-white">
-        {name}
-      </div>
+      <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+        Customer Name
+      </label>
+      <input
+        type="text"
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder="Customer name"
+        autoComplete="off"
+        className="w-full px-3 py-2.5 rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+      />
     </div>
   )
 }
@@ -227,7 +233,10 @@ export function CaptureWidget() {
       setOcr(result)
       // Parse phone — handles OCR misreads of + sign
       const { code, local } = parseOCRPhone(result.contactNumber || '')
-      const f = { code, num: local, name: result.customerName || '' }
+      // Clear Arabic names — user types them manually
+      const isArabic = (s: string) => /[\u0600-\u06FF]/.test(s)
+      const extractedName = result.customerName || ''
+      const f = { code, num: local, name: isArabic(extractedName) ? '' : extractedName }
       setForm(f)
       if (!local || !valid(code, local)) {
         setErrMsg('Contact number not detected — enter manually or retake.')
@@ -321,13 +330,18 @@ export function CaptureWidget() {
               </div>
               {phase === 'error' && <p className="text-gray-500 text-xs">{errMsg}</p>}
 
-              {/* Customer Name: display only — NO input field */}
-              {form.name ? (
-                <div>
-                  <p className="text-xs font-medium text-gray-500 mb-1">Customer Name (from bill)</p>
-                  <div className="px-3 py-2 bg-gray-800 rounded-lg text-gray-300 text-sm">{form.name}</div>
-                </div>
-              ) : null}
+              {/* Customer Name: editable input */}
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Customer Name</label>
+                <input
+                  type="text"
+                  value={form.name}
+                  onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                  placeholder="Customer name"
+                  autoComplete="off"
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
 
               {/* Contact Number: editable */}
               <div>
@@ -461,7 +475,7 @@ export function CaptureWidget() {
             {saving && <span className="text-xs text-blue-500 flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" />Saving...</span>}
           </div>
           <div className="space-y-3">
-            <NameDisplay name={form.name} />
+            <NameField value={form.name} onChange={v => setForm(f => ({ ...f, name: v }))} />
             <PhoneInput code={form.code} num={form.num} onCode={v => setForm(f => ({ ...f, code: v }))} onNum={v => setForm(f => ({ ...f, num: v }))} />
           </div>
           <div className="flex gap-2 mt-4">
@@ -490,7 +504,7 @@ export function CaptureWidget() {
           <div className="w-14 h-14 bg-red-100 dark:bg-red-900/30 rounded-full flex items-center justify-center"><AlertCircle className="h-7 w-7 text-red-600 dark:text-red-400" /></div>
           <div className="text-center"><p className="font-bold text-gray-900 dark:text-white">OCR Failed</p><p className="text-sm text-gray-500">{errMsg}</p></div>
           <div className="w-full space-y-3">
-            <NameDisplay name={form.name} />
+            <NameField value={form.name} onChange={v => setForm(f => ({ ...f, name: v }))} />
             <PhoneInput code={form.code} num={form.num} onCode={v => setForm(f => ({ ...f, code: v }))} onNum={v => setForm(f => ({ ...f, num: v }))} autoFocus />
           </div>
           <div className="flex gap-2 w-full">
