@@ -38,36 +38,67 @@ export async function compressImage(file: File): Promise<string> {
 }
 
 // ── Phone normalisation ───────────────────────────────────────────────────────
+//
+// All real-bill phone formats observed:
+//   +97451118518          → +974 + 51118518   (Snoonu standard)
+//   +97477075570          → +974 + 77075570
+//   +97466583593          → +974 + 66583593
+//   55014445              → 8 digits only → +974 + 55014445  (Snoonu no-prefix)
+//   +33942224             → +33 + 8-digit OCR-quirk → treat 8 digits → +974 + 33942224
+//   (+ 97466186274 split) → reassembled → +974 + 66186274  (Hurrier multi-line)
+//   (+974) 55575759       → +974 + 55575759   (Rafeeq parens)
+//   (+974) 50306006       → +974 + 50306006
+//   (+974) 55606693       → +974 + 55606693
+//   +97450367877          → +974 + 50367877   (Hurrier single-line)
+//   +97455985888          → +974 + 55985888
+//   +97430000999          → +974 + 30000999   (Izghawa direct)
+
 function normalisePhone(raw: string): { code: string; local: string; full: string } | null {
+  // Strip parens, spaces, dashes — keep leading +
   const stripped = raw.replace(/[()[\]\s\-]/g, '')
-  let digits = stripped.startsWith('+') ? stripped.slice(1).replace(/\D/g, '')
-    : stripped.startsWith('00') ? stripped.slice(2).replace(/\D/g, '')
-    : stripped.replace(/\D/g, '')
+
+  let digits = ''
+  if (stripped.startsWith('+')) {
+    digits = stripped.slice(1).replace(/\D/g, '')
+  } else if (stripped.startsWith('00')) {
+    digits = stripped.slice(2).replace(/\D/g, '')
+  } else {
+    digits = stripped.replace(/\D/g, '')
+  }
 
   if (!digits) return null
 
-  // 8 digits → Qatar local
-  if (digits.length === 8) return { code: '+974', local: digits, full: '+974' + digits }
+  // ── Rule 1: exactly 8 digits → Qatar local ────────────────────────────────
+  // Covers: "55014445", "+33942224" (OCR misread), "+66915444"
+  if (digits.length === 8) {
+    return { code: '+974', local: digits, full: '+974' + digits }
+  }
 
-  // 11 digits: fix OCR misread of '+' → '0','8','6' etc.
-  // e.g. "+97450100084" read as "07450100084" — first digit should be '9'
+  // ── Rule 2: 11 digits, fix OCR misread of '+' sign ────────────────────────
+  // "+97451118518" misread as "07451118518" or "87451118518":
+  // digits[1:3] == '74' but digits[0] != '9' → restore '9'
   if (digits.length === 11) {
     if (!digits.startsWith('9') && digits.slice(1, 3) === '74') {
       digits = '9' + digits.slice(1)
     }
-    if (digits.startsWith('974')) return { code: '+974', local: digits.slice(3), full: '+' + digits }
+    if (digits.startsWith('974')) {
+      return { code: '+974', local: digits.slice(3), full: '+' + digits }
+    }
+    // Other 11-digit international: last 8 = local
     return { code: '+' + digits.slice(0, 3), local: digits.slice(3), full: '+' + digits }
   }
 
-  // 12 digits starting with 974
+  // ── Rule 3: 12 digits starting with 974 ──────────────────────────────────
   if (digits.startsWith('974') && digits.length === 12) {
     return { code: '+974', local: digits.slice(3), full: '+' + digits }
   }
 
-  // 9 digits → Qatar
-  if (digits.length === 9) return { code: '+974', local: digits, full: '+974' + digits }
+  // ── Rule 4: 9 digits → Qatar (some Qatar numbers have 9-digit locals) ─────
+  if (digits.length === 9) {
+    return { code: '+974', local: digits, full: '+974' + digits }
+  }
 
-  // Generic international
+  // ── Rule 5: generic international (last 8 = local, rest = code) ───────────
   if (digits.length >= 9 && digits.length <= 15) {
     const local = digits.slice(-8)
     const codeD = digits.slice(0, digits.length - 8)
@@ -75,125 +106,216 @@ function normalisePhone(raw: string): { code: string; local: string; full: strin
       return { code: '+' + codeD, local, full: '+' + codeD + local }
     }
   }
+
   return null
 }
 
 // ── Phone finder ──────────────────────────────────────────────────────────────
 function findPhone(text: string): { code: string; local: string; full: string } | null {
   const lines = text.split('\n').map(l => l.trim())
+
+  // Phone label patterns across all bill formats:
+  // Snoonu:  "Customer Phone:"
+  // Rafeeq:  "Mobile number:", "Phone Number:"
+  // Hurrier: "TEL:"
+  // Arabic:  "هاتف", "الهاتف", "رقم الهاتف"
   const PHONE_LABEL = /customer\s*phone|mobile\s*number|mobile\s*no|phone\s*number|phone\s*no|^tel[\s:]+|contact\s*phone|هاتف|الهاتف|رقم الهاتف/i
   const PHONE_TOKEN = /(\(?\+?[\d][().\d\s\-]{6,17})/g
 
   for (let i = 0; i < lines.length; i++) {
     if (!PHONE_LABEL.test(lines[i])) continue
+
+    // ── Special handling for Hurrier "TEL: +" split across multiple lines ──
+    // Image 1 example: line="TEL: +" / "97466" / "18627" / "4"
+    if (/^tel[\s:]/i.test(lines[i])) {
+      // Collect the full phone by joining this line + subsequent digit-only lines
+      let combined = lines[i]
+      for (let j = i + 1; j <= i + 6 && j < lines.length; j++) {
+        const t = lines[j].trim()
+        // Append if purely digits (or + sign) — these are continuation fragments
+        if (/^[\d+]+$/.test(t)) {
+          combined += t
+        } else {
+          break
+        }
+      }
+      // Now search for phone in the combined string
+      for (const m of (combined.match(PHONE_TOKEN) || [])) {
+        const p = normalisePhone(m); if (p) return p
+      }
+    }
+
+    // Try number on same line
     for (const m of (lines[i].match(PHONE_TOKEN) || [])) {
       const p = normalisePhone(m); if (p) return p
     }
+
+    // Try next 1-2 lines
     for (let j = i + 1; j <= i + 2 && j < lines.length; j++) {
       for (const m of (lines[j].match(PHONE_TOKEN) || [])) {
         const p = normalisePhone(m); if (p) return p
       }
     }
   }
+
+  // ── Fallback 1: (+974) XXXXXXXX pattern ───────────────────────────────────
   const fullText = lines.join(' ')
   for (const m of (fullText.match(/\(\+\d{1,4}\)\s*\d{6,10}/g) || [])) {
     const p = normalisePhone(m); if (p) return p
   }
+
+  // ── Fallback 2: +XXXXXXXXXX pattern ───────────────────────────────────────
   for (const m of (fullText.match(/\+\d{8,14}/g) || [])) {
     const p = normalisePhone(m); if (p) return p
   }
+
+  // ── Fallback 3: standalone 8-digit number on its own line ─────────────────
   for (const line of lines) {
-    if (/^\d{8}$/.test(line)) { const p = normalisePhone(line); if (p) return p }
+    if (/^\d{8}$/.test(line)) {
+      return { code: '+974', local: line, full: '+974' + line }
+    }
   }
-  return null
-}
 
-// ── Order number finder ───────────────────────────────────────────────────────
-// IMPORTANT: must NOT pick up dates (YYYY-MM-DD) as order numbers
-const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$|^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}$/
-
-function isDate(s: string): boolean {
-  return DATE_PATTERN.test(s.trim())
-}
-
-function findOrderNumber(text: string): string {
-  const lines = text.split('\n').map(l => l.trim())
-
-  // Snoonu/Rafeeq: "Order Number" heading → next lines
+  // ── Fallback 4: Izghawa direct — phone right after Customer: block ────────
   for (let i = 0; i < lines.length; i++) {
-    if (/order\s*(number|no\.?|#)/i.test(lines[i]) || /رقم الطلب/i.test(lines[i])) {
-      for (let j = i + 1; j <= i + 4 && j < lines.length; j++) {
-        const candidate = lines[j].trim()
-        // Pure digit string, 5-15 digits, NOT a date
-        if (/^\d{5,15}$/.test(candidate) && !isDate(candidate)) return candidate
+    if (/^customer[\s(:]/i.test(lines[i])) {
+      // Check next 1-3 lines for a phone number
+      for (let j = i + 1; j <= i + 3 && j < lines.length; j++) {
+        const t = lines[j].trim()
+        if (/^\+?\d{8,14}$/.test(t.replace(/[\s\-()]/g, ''))) {
+          const p = normalisePhone(t)
+          if (p) return p
+        }
       }
     }
   }
 
-  // Inline: "Order #697514" or "Order No. 67542059"
-  const inlineMatch = text.match(/order\s*(?:#|no\.?)\s*([A-Z0-9\-]{4,15})/i)
-  if (inlineMatch && !isDate(inlineMatch[1])) return inlineMatch[1]
-
-  // Hurrier: "#6970" on its own line
-  const hashMatch = text.match(/^#(\d{4,10})$/m)
-  if (hashMatch) return hashMatch[1]
-
-  // Large standalone number on its own line (7-10 digits), not a date
-  for (const line of lines) {
-    const m = line.match(/^(\d{7,10})$/)
-    if (m && !isDate(line)) return m[1]
-  }
-
-  return ''
+  return null
 }
 
-// ── Customer name finder ──────────────────────────────────────────────────────
+// ── Name finder ───────────────────────────────────────────────────────────────
 function findName(text: string): string {
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
+
+  // Snoonu/Rafeeq: "Customer: NAME" or "Customer (العميل): NAME"
   for (let i = 0; i < lines.length; i++) {
     if (!/^customer[\s(:]/i.test(lines[i])) continue
+
+    // Name after the colon on same line
     const afterColon = lines[i].replace(/^.*?:\s*/i, '').trim()
     if (isValidName(afterColon)) return afterColon
+
+    // Name on next line (Izghawa direct has "Customer:\nTee")
     if (i + 1 < lines.length && isValidName(lines[i + 1])) return lines[i + 1]
   }
-  // Hurrier: name before TEL:
-  for (let i = 1; i < lines.length; i++) {
-    if (/^tel[\s:]/i.test(lines[i]) && isValidName(lines[i - 1])) return lines[i - 1]
+
+  // Hurrier: name sits right before or beside the order number line
+  // Format: "#6207  noura noura" or separate lines
+  for (let i = 0; i < lines.length; i++) {
+    if (/^#\d{4,6}/.test(lines[i])) {
+      // Name might be on same line after the #number
+      const afterHash = lines[i].replace(/^#\d+\s*/, '').trim()
+      if (isValidName(afterHash)) return afterHash
+    }
   }
+
+  // Hurrier: name before TEL: line
+  for (let i = 1; i < lines.length; i++) {
+    if (/^tel[\s:]/i.test(lines[i]) && isValidName(lines[i - 1])) {
+      return lines[i - 1]
+    }
+  }
+
   return ''
 }
 
 function isValidName(s: string): boolean {
   if (!s || s.length < 2 || s.length > 80) return false
   if (/^\d/.test(s) || /^\+/.test(s)) return false
-  if (/^(customer|mobile|phone|tel|order|delivery|vendor|العميل|هاتف|pickup|collection)/i.test(s)) return false
+  if (/^(customer|mobile|phone|tel|order|delivery|vendor|العميل|هاتف|pickup|collection|hurrier|snoonu|rafeeq|no\s*cutlery|subtotal|total|delivery\s*fee)/i.test(s)) return false
   return true
+}
+
+// ── Order number finder ───────────────────────────────────────────────────────
+// Must NOT match dates (YYYY-MM-DD, DD/MM/YYYY, May-13-2026 etc.)
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$|^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}$|^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i
+
+function isDateStr(s: string): boolean {
+  return DATE_RE.test(s.trim())
+}
+
+function findOrderNumber(text: string): string {
+  const lines = text.split('\n').map(l => l.trim())
+
+  // ── Snoonu / Rafeeq / custom: "Order Number", "Order No.", "Order No" heading ──
+  for (let i = 0; i < lines.length; i++) {
+    if (/order\s*(number|no\.?|nr\.?|#)/i.test(lines[i]) || /رقم الطلب/i.test(lines[i])) {
+      // Search next 1-4 lines for a pure digit string (5-15 digits, not a date)
+      for (let j = i + 1; j <= i + 4 && j < lines.length; j++) {
+        const c = lines[j].trim()
+        if (/^\d{5,15}$/.test(c) && !isDateStr(c)) return c
+      }
+    }
+  }
+
+  // ── Rafeeq: "Order No.\n\n67569242" (number after blank line) ──────────────
+  for (let i = 0; i < lines.length; i++) {
+    if (/^order\s*no[\s.]/i.test(lines[i])) {
+      for (let j = i + 1; j <= i + 5 && j < lines.length; j++) {
+        const c = lines[j].trim()
+        if (/^\d{5,15}$/.test(c) && !isDateStr(c)) return c
+      }
+    }
+  }
+
+  // ── Hurrier: "#6207" or "#7115" on its own ─────────────────────────────────
+  for (const line of lines) {
+    const m = line.match(/^#(\d{4,10})/)
+    if (m) return m[1]
+  }
+
+  // ── Hurrier: "ORDER NR: 3623632460" or "ORDER NR.: 3632273376" ─────────────
+  for (const line of lines) {
+    const m = line.match(/order\s*nr\.?\s*:?\s*(\d{5,15})/i)
+    if (m && !isDateStr(m[1])) return m[1]
+  }
+
+  // ── Izghawa: "Order #697514" inline ────────────────────────────────────────
+  const inlineMatch = text.match(/order\s*#\s*(\d{4,15})/i)
+  if (inlineMatch && !isDateStr(inlineMatch[1])) return inlineMatch[1]
+
+  // ── Standalone large number (7-10 digits, own line, not a date) ────────────
+  for (const line of lines) {
+    const m = line.match(/^(\d{7,10})$/)
+    if (m && !isDateStr(line)) return m[1]
+  }
+
+  return ''
 }
 
 // ── Delivery partner finder ───────────────────────────────────────────────────
 function findPartner(text: string): string {
-  const known = [
-    { name: 'Snoonu',       re: /snoonu/i },
-    { name: 'Rafeeq',       re: /rafeeq|رفيق/i },
-    { name: 'Hurrier',      re: /hurrier/i },
-    { name: 'Talabat',      re: /talabat/i },
-    { name: 'HungerStation',re: /hungerstation/i },
-    { name: 'Jahez',        re: /jahez/i },
-    { name: 'Careem',       re: /careem/i },
-    { name: 'Noon Food',    re: /noon\s*food/i },
-    { name: 'Marsool',      re: /marsool/i },
-    { name: 'Zomato',       re: /zomato/i },
+  const partners = [
+    { name: 'Snoonu',        re: /snoonu/i },
+    { name: 'Rafeeq',        re: /rafeeq|رفيق/i },
+    { name: 'Hurrier',       re: /hurrier/i },
+    { name: 'Talabat',       re: /talabat/i },
+    { name: 'HungerStation', re: /hungerstation/i },
+    { name: 'Jahez',         re: /jahez/i },
+    { name: 'Careem',        re: /careem/i },
+    { name: 'Noon Food',     re: /noon\s*food/i },
+    { name: 'Marsool',       re: /marsool/i },
+    { name: 'Zomato',        re: /zomato/i },
   ]
-  for (const { name, re } of known) { if (re.test(text)) return name }
+  for (const { name, re } of partners) { if (re.test(text)) return name }
   return ''
 }
 
 // ── Restaurant / vendor finder ────────────────────────────────────────────────
-// From real bills: "O2 Cafe - Izghawa", "O2 Cafe - Al-Khisah", "Vendor: O2 Cafe"
 function findRestaurant(text: string): string {
   const lines = text.split('\n').map(l => l.trim())
 
-  // Explicit vendor label (Rafeeq format)
+  // Rafeeq: "Vendor Name : O2 Cafe"
   for (const line of lines) {
     if (/vendor\s*(name)?\s*:/i.test(line) || /اسم البائع/i.test(line)) {
       const val = line.replace(/^.*?:\s*/i, '').trim()
@@ -201,25 +323,13 @@ function findRestaurant(text: string): string {
     }
   }
 
-  // O2 Cafe pattern: line contains "O2 Cafe" or "O2 Coffee" etc.
+  // Snoonu/direct: line containing "O2 Cafe"
   for (const line of lines) {
-    if (/O2\s*Caf[eé]/i.test(line)) return line.replace(/delivery order|takeaway|pickup order/i, '').trim()
-  }
-
-  // After partner name, restaurant is often on the next line
-  const PARTNER_RE = /snoonu|rafeeq|hurrier|talabat/i
-  for (let i = 0; i < lines.length; i++) {
-    if (PARTNER_RE.test(lines[i]) && i + 1 < lines.length) {
-      const next = lines[i + 1].trim()
-      if (next.length > 2 && next.length < 80
-          && !/^(delivery|order|pickup|الطلب|رقم)/i.test(next)
-          && /[A-Za-z]/.test(next)) {
-        return next
-      }
+    if (/O2\s*Caf[eé]/i.test(line)) {
+      return line.replace(/delivery order|takeaway|pickup order/gi, '').trim()
     }
   }
 
-  // "Izghawa" as standalone restaurant
   if (/\bizghawa\b/i.test(text)) return 'O2 Cafe - Izghawa'
 
   return ''
@@ -227,13 +337,13 @@ function findRestaurant(text: string): string {
 
 // ── Date finder ───────────────────────────────────────────────────────────────
 function findDate(text: string): string {
-  // ISO: 2026-05-15 (with optional time)
+  // ISO: 2026-05-16 (with optional time)
   const iso = text.match(/\b(\d{4}-\d{2}-\d{2})(?:\s+\d{2}:\d{2}:\d{2})?\b/)
   if (iso) return iso[1]
   // US slash: 5/14/2026
   const us = text.match(/\b(\d{1,2}\/\d{1,2}\/\d{4})\b/)
   if (us) return us[1]
-  // Verbal: May-13-2026 or May 13, 2026
+  // Verbal: May-14-2026 or May 12, 2026
   const verbal = text.match(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[\s\-]+\d{1,2}[\s,\-]+\d{4}/i)
   if (verbal) return verbal[0]
   return ''
@@ -250,7 +360,7 @@ export async function performOCR(imageData: string, _mode: 'fast' | 'ai' = 'fast
     return {
       customerName:    findName(raw),
       contactNumber:   phone?.full || '',
-      orderNumber:      findOrderNumber(raw),   // stored as order_number in DB
+      orderNumber:     findOrderNumber(raw),
       billDate:        findDate(raw),
       restaurant:      findRestaurant(raw),
       address:         '',
