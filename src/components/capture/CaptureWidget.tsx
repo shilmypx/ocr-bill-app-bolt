@@ -467,13 +467,22 @@ export function CaptureWidget() {
         </CardContent></Card>
       )}
 
-      {/* REVIEW — only Name (read-only) + Contact — NO BILL NUMBER */}
+      {/* REVIEW — verify contact number prominently before saving */}
       {phase === 'review' && (
         <Card><CardContent>
           <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2"><CheckCircle className="h-5 w-5 text-green-500" /><span className="font-semibold text-gray-900 dark:text-white">Review & Save</span></div>
+            <div className="flex items-center gap-2"><CheckCircle className="h-5 w-5 text-green-500" /><span className="font-semibold text-gray-900 dark:text-white">Verify & Save</span></div>
             {saving && <span className="text-xs text-blue-500 flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" />Saving...</span>}
           </div>
+
+          {/* Prominent number preview — tap to edit */}
+          <div className="mb-4 p-4 bg-blue-50 dark:bg-blue-900/20 border-2 border-blue-200 dark:border-blue-700 rounded-xl text-center">
+            <p className="text-xs text-blue-500 dark:text-blue-400 mb-1 font-medium">⚠️ Check contact number matches the bill</p>
+            <p className="text-2xl font-mono font-bold text-blue-800 dark:text-blue-200 tracking-wide">
+              {form.code}{form.num || <span className="text-blue-300">—</span>}
+            </p>
+          </div>
+
           <div className="space-y-3">
             <NameField value={form.name} onChange={v => setForm(f => ({ ...f, name: v }))} />
             <PhoneInput code={form.code} num={form.num} onCode={v => setForm(f => ({ ...f, code: v }))} onNum={v => setForm(f => ({ ...f, num: v }))} />

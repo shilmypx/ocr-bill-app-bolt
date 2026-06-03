@@ -20,7 +20,8 @@ export async function compressImage(file: File): Promise<string> {
     img.onload = () => {
       URL.revokeObjectURL(url)
       const canvas = document.createElement('canvas')
-      const MAX = 1600
+      // Use a higher resolution for OCR — more pixels = better digit recognition
+      const MAX = 2000
       let { width, height } = img
       if (width > MAX || height > MAX) {
         if (width > height) { height = Math.round(height * MAX / width); width = MAX }
@@ -28,9 +29,29 @@ export async function compressImage(file: File): Promise<string> {
       }
       canvas.width = width; canvas.height = height
       const ctx = canvas.getContext('2d')!
-      ctx.filter = 'contrast(1.3) brightness(1.05)'
+
+      // Step 1: draw original
       ctx.drawImage(img, 0, 0, width, height)
-      resolve(canvas.toDataURL('image/jpeg', 0.9))
+
+      // Step 2: enhance contrast for receipt text
+      // Receipts are typically black text on white — boost contrast significantly
+      const imageData = ctx.getImageData(0, 0, width, height)
+      const data = imageData.data
+      for (let i = 0; i < data.length; i += 4) {
+        // Convert to grayscale first
+        const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]
+        // Apply strong contrast: push dark pixels darker, light pixels lighter
+        // This helps separate digits like 5/8, 9/0 that look similar in grey
+        const enhanced = gray < 128
+          ? Math.max(0, gray - 40)      // darken text pixels
+          : Math.min(255, gray + 30)    // lighten background pixels
+        data[i] = enhanced
+        data[i + 1] = enhanced
+        data[i + 2] = enhanced
+      }
+      ctx.putImageData(imageData, 0, 0)
+
+      resolve(canvas.toDataURL('image/jpeg', 0.95))
     }
     img.onerror = reject
     img.src = url
@@ -349,8 +370,77 @@ function findDate(text: string): string {
   return ''
 }
 
-// ── Main OCR ──────────────────────────────────────────────────────────────────
-export async function performOCR(imageData: string, _mode: 'fast' | 'ai' = 'fast'): Promise<OCRResult> {
+
+// ── Claude Vision OCR (AI Enhanced mode) ─────────────────────────────────────
+// Uses Claude's multimodal API for accurate digit/text extraction
+async function performOCRWithClaude(imageData: string): Promise<OCRResult> {
+  try {
+    const base64 = imageData.includes(',') ? imageData.split(',')[1] : imageData
+
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 500,
+        messages: [{
+          role: 'user',
+          content: [
+            {
+              type: 'image',
+              source: { type: 'base64', media_type: 'image/jpeg', data: base64 }
+            },
+            {
+              type: 'text',
+              text: `Extract from this delivery bill receipt. Return ONLY valid JSON, no other text:
+{
+  "name": "customer name in English only, empty string if Arabic or not found",
+  "phone": "full phone number with country code e.g. +97455322995, empty if not found",
+  "orderNumber": "order/bill number digits only, empty if not found",
+  "partner": "delivery company name e.g. Snoonu, Rafeeq, Hurrier, or empty",
+  "date": "date in YYYY-MM-DD format or empty"
+}`
+            }
+          ]
+        }]
+      })
+    })
+
+    if (!response.ok) throw new Error('Claude API error: ' + response.status)
+
+    const data = await response.json()
+    const text = data?.content?.[0]?.text || ''
+    
+    // Parse JSON from response
+    const jsonMatch = text.match(/\{[\s\S]*\}/)
+    if (!jsonMatch) throw new Error('No JSON in Claude response')
+    
+    const parsed = JSON.parse(jsonMatch[0])
+    
+    // Normalise the phone number
+    const rawPhone = (parsed.phone || '').trim()
+    const normPhone = rawPhone ? normalisePhone(rawPhone) : null
+
+    return {
+      customerName:    parsed.name || '',
+      contactNumber:   normPhone?.full || rawPhone || '',
+      orderNumber:     parsed.orderNumber || '',
+      billDate:        parsed.date || '',
+      restaurant:      '',
+      address:         '',
+      deliveryPartner: parsed.partner || '',
+      rawText:         text,
+      confidence:      95, // Claude is highly accurate
+    }
+  } catch (e) {
+    console.error('Claude Vision error:', e)
+    // Fall back to Tesseract
+    return performOCRWithTesseract(imageData)
+  }
+}
+
+// ── Tesseract OCR (Fast mode) ─────────────────────────────────────────────────
+async function performOCRWithTesseract(imageData: string): Promise<OCRResult> {
   if (!workerReady || !worker) await initTesseractWorker()
   try {
     const { data } = await worker.recognize(imageData)
@@ -369,9 +459,17 @@ export async function performOCR(imageData: string, _mode: 'fast' | 'ai' = 'fast
       confidence,
     }
   } catch (e) {
-    console.error('OCR error:', e)
+    console.error('Tesseract error:', e)
     return { customerName:'', contactNumber:'', orderNumber:'', billDate:'', restaurant:'', address:'', deliveryPartner:'', rawText:'', confidence:0 }
   }
+}
+
+// ── Main OCR dispatcher ────────────────────────────────────────────────────────
+export async function performOCR(imageData: string, mode: 'fast' | 'ai' = 'fast'): Promise<OCRResult> {
+  if (mode === 'ai') {
+    return performOCRWithClaude(imageData)
+  }
+  return performOCRWithTesseract(imageData)
 }
 
 // ── Exports ───────────────────────────────────────────────────────────────────
