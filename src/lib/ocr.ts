@@ -203,8 +203,8 @@ function isLatinName(s: string): boolean {
   if (!s || s.length < 2 || s.length > 80) return false
   if (/^\d/.test(s) || /^\+/.test(s)) return false
   if (!/^[a-zA-Z][a-zA-Z\s\-''.]*$/.test(s)) return false
-  // Reject known label / badge / receipt words
-  if (/^(customer|mobile|phone|tel|order|delivery|vendor|pickup|collection|hurrier|snoonu|rafeeq|no cutlery|subtotal|total|prepaid|not paid|pro|item|qty|qar|qr|price|note|address|street|building|floor|zone|apartment|payment|online|cash|thanks|thank)/i.test(s)) return false
+  // Reject known label / badge / receipt / address / food words
+  if (/^(customer|mobile|phone|tel|order|delivery|vendor|pickup|collection|hurrier|snoonu|rafeeq|no cutlery|subtotal|total|prepaid|not paid|pro|item|qty|qar|qr|price|note|address|street|building|floor|zone|apartment|payment|online|cash|thanks|thank|village|compound|district|road|avenue|block|sector|area|gate|paradise|skimmed|labnah|matcha|frappe|smoothie|raspberry|chocolate|crunchy|croissant|sandwich|cake|latte|cappuccino|espresso|coffee|juice|toast|honey|cream|milk|fat|waffle|pancake)/i.test(s)) return false
   return true
 }
 
@@ -259,10 +259,11 @@ function findName(text: string): string {
     if (parts.length > 0) return parts.join(' ')
 
     // Forward scan (fallback — Tesseract placed name AFTER TEL: due to column ordering)
-    for (let j = i + 1; j <= Math.min(i + 4, lines.length - 1); j++) {
+    // Only accept names — skip addresses, food items (now excluded by isLatinName)
+    for (let j = i + 1; j <= Math.min(i + 3, lines.length - 1); j++) {
       const l = lines[j].trim()
-      // Stop at food items, prices, totals
-      if (/^(\d|qr|subtotal|total|delivery|no cutlery|may|order)/i.test(l)) break
+      // Hard stop: prices, totals, numbered items, dates
+      if (/^(\d|qr|subtotal|total|delivery|no cutlery|may|order nr|order no)/i.test(l)) break
       if (isLatinName(l)) { parts.push(l); break }
     }
     if (parts.length > 0) return parts.join(' ')
