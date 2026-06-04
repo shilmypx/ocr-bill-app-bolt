@@ -251,11 +251,18 @@ export function CaptureWidget() {
       setOcr(result)
       // Parse phone — handles OCR misreads of + sign
       const { code, local } = parseOCRPhone(result.contactNumber || '')
-      // Clear non-Latin names (Arabic, OCR garbage from Arabic text)
-      // Only keep names that are purely basic Latin letters + spaces/hyphens
+      // Clear Arabic/garbled names:
+      // 1. Name must be Latin-only characters
+      // 2. If the raw OCR text near "customer" contains Arabic Unicode → clear
+      //    (handles case where name OCRs as garbage but nearby "العميل" preserves Arabic)
       const extractedName = result.customerName || ''
       const isLatinOnly = (s: string) => /^[a-zA-Z][a-zA-Z\s\-''.]*$/.test(s.trim())
-      const f = { code, num: local, name: isLatinOnly(extractedName) ? extractedName : '' }
+      const rawLower = (result.rawText || '').toLowerCase()
+      const custIdx = rawLower.indexOf('customer')
+      const nearCust = custIdx >= 0 ? result.rawText.slice(custIdx, custIdx + 200) : ''
+      const arabicNearName = /[\u0600-\u06FF]/.test(nearCust)
+      const cleanName = (isLatinOnly(extractedName) && !arabicNearName) ? extractedName : ''
+      const f = { code, num: local, name: cleanName }
       setForm(f)
       if (!local || !valid(code, local)) {
         setErrMsg('Contact number not detected — enter manually or retake.')

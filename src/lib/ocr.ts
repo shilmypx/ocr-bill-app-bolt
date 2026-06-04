@@ -236,6 +236,16 @@ function findName(text: string): string {
   for (let i = 0; i < lines.length; i++) {
     if (!/^customer[\s(:]/i.test(lines[i])) continue
 
+    // Detect Arabic context: if the current line OR the next line contains Arabic
+    // characters, the customer name is Arabic (even if OCR garbled it into Latin)
+    const lineArabic = /[\u0600-\u06FF]/.test(lines[i])
+    const nextArabic = i + 1 < lines.length && /[\u0600-\u06FF]/.test(lines[i + 1])
+    // Also check for common OCR outputs of "العميل" that still contain Arabic
+    const nextIsArabicLabel = i + 1 < lines.length &&
+      (/[\u0600-\u06FF]/.test(lines[i + 1]) || /^[Aa]l[-\s]?[Aa]m/.test(lines[i + 1]))
+
+    if (lineArabic || nextArabic || nextIsArabicLabel) return ''
+
     // Name after colon on same line
     const afterColon = lines[i].replace(/^.*?:\s*/i, '').trim()
     if (isLatinName(afterColon)) return afterColon
@@ -245,33 +255,28 @@ function findName(text: string): string {
   }
 
   // ── Hurrier: scan BACKWARDS from TEL: collecting valid name lines ─────────
-  // Handles:  "#6207 noura / noura / TEL:" → "noura noura"
-  //           "#7115 H Alqahtani / TEL:"   → "H Alqahtani"
-  //           "#6970 / rodah almalki / pro / TEL:" → "rodah almalki" (skips "pro")
+  // Handles: "#7099 Reem Youssef / TEL:" → "Reem Youssef"
+  //          "#6207 noura / noura / TEL:" → "noura noura"
+  //          "7099 Reem Youssef" (OCR missed #) → still extracted
+  //          "#6970 / rodah almalki / pro / TEL:" → "rodah almalki" (skips pro)
   for (let i = 1; i < lines.length; i++) {
     if (!/^tel[\s:]/i.test(lines[i])) continue
     const parts: string[] = []
     for (let j = i - 1; j >= Math.max(0, i - 5); j--) {
       const l = lines[j].trim()
-      if (/^#\d{4,}/.test(l)) {
-        // Extract name portion after the order number on same line (e.g. "#6207 noura")
-        const afterHash = l.replace(/^#\d+\s*/, '').trim()
-        if (isLatinName(afterHash)) parts.unshift(afterHash)
+
+      // Stop at order number lines — handles both "#7099 name" and "7099 name"
+      if (/^#?\d{4,}/.test(l)) {
+        // Extract name after the order number (e.g. "#7099 Reem Youssef" or "7099 Reem Youssef")
+        const afterNum = l.replace(/^#?\d+\s*/, '').trim()
+        if (isLatinName(afterNum)) parts.unshift(afterNum)
         break
       }
       if (/^(hurrier|snoonu|rafeeq)/i.test(l)) break
-      if (isLatinName(l)) parts.unshift(l)  // valid name fragment
-      // else: skip badge/label/receipt words silently
+      if (isLatinName(l)) parts.unshift(l)
+      // else: skip badge/label/receipt words
     }
     if (parts.length > 0) return parts.join(' ')
-  }
-
-  // ── Hurrier fallback: name on same line as "#6207 noura" ──────────────────
-  for (const line of lines) {
-    if (/^#\d{4,6}/.test(line)) {
-      const afterHash = line.replace(/^#\d+\s*/, '').trim()
-      if (isLatinName(afterHash)) return afterHash
-    }
   }
 
   return ''
