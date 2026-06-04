@@ -235,38 +235,93 @@ function findName(text: string): string {
     if (i + 1 < lines.length && isLatinName(lines[i + 1])) return lines[i + 1]
   }
 
-  // ── Hurrier: scan BACKWARDS from TEL: collecting valid name lines ─────────
-  // Handles: "#7099 Reem Youssef / TEL:" → "Reem Youssef"
-  //          "#6207 noura / noura / TEL:" → "noura noura"
-  //          "7099 Reem Youssef" (OCR missed #) → still extracted
-  //          "#6970 / rodah almalki / pro / TEL:" → "rodah almalki" (skips pro)
-  //          Name appearing AFTER TEL: in OCR output (column ordering quirk)
+  // ── Hurrier: collect ALL fragments between #XXXX and TEL: ─────────────────
+  // Hurrier prints name in a NARROW right column — Tesseract splits names across
+  // many lines and even mid-word:
+  //   "#7086 asma Obeidat / [pro] / TEL:"         → "asma Obeidat"
+  //   "#6113 Reem / MKH / Al / Thani / TEL:"      → "Reem MKH Al Thani"
+  //   "#6036 sawar / y / Alhajri / TEL:"          → "sawary Alhajri"
+  //   "#6111 Sara F / akhroo / TEL:"              → "Sara Fakhroo"
+  //   "#6075 Fatma / Mahm / oud / [pro] / TEL:"   → "Fatma Mahmoud"
+  //   "#6070 ha / TEL:"                           → "ha"
+  //   "#7099 Reem Youssef / TEL: / paradise village" → "Reem Youssef"
   for (let i = 1; i < lines.length; i++) {
     if (!/^tel[\s:]/i.test(lines[i])) continue
-    const parts: string[] = []
 
-    // Backwards scan (normal case — name appears before TEL:)
-    for (let j = i - 1; j >= Math.max(0, i - 5); j--) {
-      const l = lines[j].trim()
-      if (/^#?\d{4,}/.test(l)) {
-        const afterNum = l.replace(/^#?\d+\s*/, '').trim()
-        if (isLatinName(afterNum)) parts.unshift(afterNum)
-        break
-      }
-      if (/^(hurrier|snoonu|rafeeq)/i.test(l)) break
-      if (isLatinName(l)) parts.unshift(l)
+    // Find the order number line (#XXXX) scanning backwards
+    let orderIdx = -1
+    for (let j = i - 1; j >= Math.max(0, i - 15); j--) {
+      if (/^#?\d{4,}/.test(lines[j])) { orderIdx = j; break }
+      if (/^hurrier/i.test(lines[j])) break
     }
-    if (parts.length > 0) return parts.join(' ')
 
-    // Forward scan (fallback — Tesseract placed name AFTER TEL: due to column ordering)
-    // Only accept names — skip addresses, food items (now excluded by isLatinName)
+    // Collect every fragment between order number and TEL:
+    const frags: string[] = []
+    const scanFrom = orderIdx >= 0 ? orderIdx : Math.max(0, i - 12)
+    for (let j = scanFrom; j < i; j++) {
+      const l = lines[j].trim()
+      if (!l) continue
+      if (/^#?\d{4,}/.test(l)) {
+        // Extract inline name after the order number (e.g. "#7086 asma Obeidat")
+        const after = l.replace(/^#?\d+\s*/, '').trim()
+        if (after && !/^(hurrier|collection|prepaid|not paid|pickup|am\b|pm\b)/i.test(after))
+          frags.push(after)
+        continue
+      }
+      // Skip receipt structure words
+      if (/^(hurrier|snoonu|rafeeq|collection|prepaid|not paid|pickup|at\b|am\b|pm\b|no cutlery|subtotal|total|delivery|order nr|pro\b)/i.test(l)) continue
+      // Skip pure digit lines (times like "5:21", partial phone fragments handled elsewhere)
+      if (/^[\d:]+$/.test(l)) continue
+      // Skip Arabic text
+      if (/[\u0600-\u06FF]/.test(l)) continue
+      // Accept anything else — including short fragments like "y", "MKH", "oud"
+      frags.push(l)
+    }
+
+    if (frags.length === 0) continue
+
+    // Smart-join rules (handles narrow-column Tesseract line wrapping):
+    // 1. Single char ("y") → always concatenate: "sawar"+"y" → "sawary"
+    // 2. Last word ends with uppercase ("Sara F") → concatenate: +"akhroo" → "Sara Fakhroo"
+    // 3. Last word is short (≤5 chars) + ends consonant ("Mahm") → concatenate: +"oud" → "Mahmoud"
+    // 4. Otherwise → add space: "noura"+"noura" → "noura noura" (vowel ending, not truncated)
+    const VOWELS = 'aeiouAEIOU'
+    function needsConcat(accumulated: string, frag: string): boolean {
+      // Rule 1: single char (e.g. "y") always concatenate
+      if (frag.length === 1) return true
+      const words = accumulated.split(' ')
+      const lastWord = words[words.length - 1]
+      const lastChar = lastWord[lastWord.length - 1]
+      // Rule 2: last WORD is a single uppercase letter (initial like "F" in "Sara F") → concatenate
+      if (lastWord.length === 1 && lastChar >= 'A' && lastChar <= 'Z') return true
+      // Rule 3: current frag starts lowercase AND last word is short AND ends consonant
+      // (e.g. "Mahm"+"oud", "sawar"+"y" handled by rule1, NOT "Reem"+"MKH" since MKH is uppercase)
+      const fragStartsLower = frag.charAt(0) === frag.charAt(0).toLowerCase() &&
+                              frag.charAt(0) !== frag.charAt(0).toUpperCase()
+      if (fragStartsLower && lastWord.length <= 5 && !VOWELS.includes(lastChar)) return true
+      return false
+    }
+    let name = frags[0]
+    for (let k = 1; k < frags.length; k++) {
+      name = needsConcat(name, frags[k]) ? name + frags[k] : name + ' ' + frags[k]
+    }
+
+    // Final validation: must start with a letter and not be a known non-name
+    name = name.trim()
+    if (name.length >= 2 && /^[a-zA-Z]/.test(name) &&
+        !/^(no cutlery|subtotal|total|delivery|pickup|collection|prepaid)/i.test(name)) {
+      return name
+    }
+  }
+
+  // ── Forward scan fallback (name placed AFTER TEL: by Tesseract column ordering)
+  for (let i = 1; i < lines.length; i++) {
+    if (!/^tel[\s:]/i.test(lines[i])) continue
     for (let j = i + 1; j <= Math.min(i + 3, lines.length - 1); j++) {
       const l = lines[j].trim()
-      // Hard stop: prices, totals, numbered items, dates
-      if (/^(\d|qr|subtotal|total|delivery|no cutlery|may|order nr|order no)/i.test(l)) break
-      if (isLatinName(l)) { parts.push(l); break }
+      if (/^(\d|qr|subtotal|total|delivery|no cutlery|may|order)/i.test(l)) break
+      if (isLatinName(l)) return l
     }
-    if (parts.length > 0) return parts.join(' ')
   }
 
   return ''
