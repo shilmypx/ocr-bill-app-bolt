@@ -208,6 +208,23 @@ function isLatinName(s: string): boolean {
   return true
 }
 
+// Helper for Hurrier smart-join: decides whether to concat or add space between name fragments
+const HURRIER_VOWELS = 'aeiouAEIOU'
+function hurrierNeedsConcat(accumulated: string, frag: string): boolean {
+  // Rule 1: single char (e.g. "y") always concatenate
+  if (frag.length === 1) return true
+  const words = accumulated.split(' ')
+  const lastWord = words[words.length - 1]
+  const lastChar = lastWord[lastWord.length - 1]
+  // Rule 2: last word is a single uppercase letter (initial like "F" in "Sara F")
+  if (lastWord.length === 1 && lastChar >= 'A' && lastChar <= 'Z') return true
+  // Rule 3: current frag starts lowercase AND last word is short AND ends consonant
+  const fragStartsLower = frag.charAt(0) === frag.charAt(0).toLowerCase() &&
+                          frag.charAt(0) !== frag.charAt(0).toUpperCase()
+  if (fragStartsLower && lastWord.length <= 5 && !HURRIER_VOWELS.includes(lastChar)) return true
+  return false
+}
+
 function isValidName(s: string): boolean { return isLatinName(s) }
 
 function findName(text: string): string {
@@ -285,25 +302,9 @@ function findName(text: string): string {
     // 2. Last word ends with uppercase ("Sara F") → concatenate: +"akhroo" → "Sara Fakhroo"
     // 3. Last word is short (≤5 chars) + ends consonant ("Mahm") → concatenate: +"oud" → "Mahmoud"
     // 4. Otherwise → add space: "noura"+"noura" → "noura noura" (vowel ending, not truncated)
-    const VOWELS = 'aeiouAEIOU'
-    function needsConcat(accumulated: string, frag: string): boolean {
-      // Rule 1: single char (e.g. "y") always concatenate
-      if (frag.length === 1) return true
-      const words = accumulated.split(' ')
-      const lastWord = words[words.length - 1]
-      const lastChar = lastWord[lastWord.length - 1]
-      // Rule 2: last WORD is a single uppercase letter (initial like "F" in "Sara F") → concatenate
-      if (lastWord.length === 1 && lastChar >= 'A' && lastChar <= 'Z') return true
-      // Rule 3: current frag starts lowercase AND last word is short AND ends consonant
-      // (e.g. "Mahm"+"oud", "sawar"+"y" handled by rule1, NOT "Reem"+"MKH" since MKH is uppercase)
-      const fragStartsLower = frag.charAt(0) === frag.charAt(0).toLowerCase() &&
-                              frag.charAt(0) !== frag.charAt(0).toUpperCase()
-      if (fragStartsLower && lastWord.length <= 5 && !VOWELS.includes(lastChar)) return true
-      return false
-    }
     let name = frags[0]
     for (let k = 1; k < frags.length; k++) {
-      name = needsConcat(name, frags[k]) ? name + frags[k] : name + ' ' + frags[k]
+      name = hurrierNeedsConcat(name, frags[k]) ? name + frags[k] : name + ' ' + frags[k]
     }
 
     // Final validation: must start with a letter and not be a known non-name
