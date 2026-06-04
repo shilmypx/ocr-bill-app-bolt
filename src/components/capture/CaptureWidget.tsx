@@ -287,7 +287,17 @@ export function CaptureWidget() {
     if (fileRef.current) fileRef.current.value = ''
   }, [runOCR])
 
-  const retake = () => { reset(); if (mode === 'camera') startCam() }
+  const retake = () => {
+    // If user was in fullscreen before capture, go straight back to fullscreen
+    if (wasFull.current) {
+      setPhase('idle'); setOcr(null); setErrMsg('')
+      setForm(empty); setSaving(false); setIsDup(false)
+      setFullscreen(true)  // Restore fullscreen immediately (no flash)
+    } else {
+      reset()
+      if (mode === 'camera') startCam()
+    }
+  }
   const canSave = valid(form.code, form.num)
 
   // ── FULLSCREEN ─────────────────────────────────────────────────────────────
@@ -494,17 +504,17 @@ export function CaptureWidget() {
       {/* REVIEW — verify contact number prominently before saving */}
       {phase === 'review' && (
         <Card><CardContent>
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2"><CheckCircle className="h-5 w-5 text-green-500" /><span className="font-semibold text-gray-900 dark:text-white">Verify & Save</span></div>
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-1.5"><CheckCircle className="h-4 w-4 text-green-500" /><span className="font-semibold text-sm text-gray-900 dark:text-white">Verify & Save</span></div>
             {saving && <span className="text-xs text-blue-500 flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" />Saving...</span>}
           </div>
 
-          {/* Prominent number preview — tap to edit */}
-          <div className="mb-4 p-4 bg-blue-50 dark:bg-blue-900/20 border-2 border-blue-200 dark:border-blue-700 rounded-xl text-center">
-            <p className="text-xs text-blue-500 dark:text-blue-400 mb-1 font-medium">⚠️ Check contact number matches the bill</p>
-            <p className="text-2xl font-mono font-bold text-blue-800 dark:text-blue-200 tracking-wide">
-              {form.code}{form.num || <span className="text-blue-300">—</span>}
-            </p>
+          {/* Compact number verification — inline banner */}
+          <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700 rounded-lg mb-3">
+            <span className="text-xs text-amber-600 dark:text-amber-400 font-medium shrink-0">⚠️ Verify:</span>
+            <span className="text-base font-mono font-bold text-blue-800 dark:text-blue-200 flex-1 truncate">
+              {form.code}{form.num || '—'}
+            </span>
           </div>
 
           <div className="space-y-3">
