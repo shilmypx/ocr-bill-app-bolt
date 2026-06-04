@@ -217,14 +217,13 @@ function findPhone(text: string): { code: string; local: string; full: string } 
 // ── Name finder ───────────────────────────────────────────────────────────────
 
 // A name is valid if it contains ONLY basic Latin letters, spaces, hyphens, apostrophes, dots
-// This intentionally rejects Arabic characters AND OCR garbage (symbols, non-ASCII)
+// Rejects: Arabic, OCR garbage, known label words and receipt badge words
 function isLatinName(s: string): boolean {
   if (!s || s.length < 2 || s.length > 80) return false
   if (/^\d/.test(s) || /^\+/.test(s)) return false
-  // Reject if contains non-Latin characters (Arabic, symbols, etc.)
   if (!/^[a-zA-Z][a-zA-Z\s\-''.]*$/.test(s)) return false
-  // Reject known label words
-  if (/^(customer|mobile|phone|tel|order|delivery|vendor|pickup|collection|hurrier|snoonu|rafeeq|no cutlery|subtotal|total|prepaid|not paid)/i.test(s)) return false
+  // Reject known label / badge / receipt words
+  if (/^(customer|mobile|phone|tel|order|delivery|vendor|pickup|collection|hurrier|snoonu|rafeeq|no cutlery|subtotal|total|prepaid|not paid|pro|item|qty|qar|qr|price|note|address|street|building|floor|zone|apartment|payment|online|cash|thanks|thank)/i.test(s)) return false
   return true
 }
 
@@ -233,7 +232,7 @@ function isValidName(s: string): boolean { return isLatinName(s) }
 function findName(text: string): string {
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
 
-  // Snoonu/Rafeeq: "Customer: NAME" or "Customer (العميل): NAME"
+  // ── Snoonu/Rafeeq: "Customer: NAME" or "Customer (العميل): NAME" ──────────
   for (let i = 0; i < lines.length; i++) {
     if (!/^customer[\s(:]/i.test(lines[i])) continue
 
@@ -245,19 +244,29 @@ function findName(text: string): string {
     if (i + 1 < lines.length && isLatinName(lines[i + 1])) return lines[i + 1]
   }
 
-  // Hurrier: name sits on 1 or 2 lines right before "TEL:"
-  // e.g. "noura" / "noura" / "TEL: +"  → join as "noura noura"
+  // ── Hurrier: scan BACKWARDS from TEL: collecting valid name lines ─────────
+  // Handles:  "#6207 noura / noura / TEL:" → "noura noura"
+  //           "#7115 H Alqahtani / TEL:"   → "H Alqahtani"
+  //           "#6970 / rodah almalki / pro / TEL:" → "rodah almalki" (skips "pro")
   for (let i = 1; i < lines.length; i++) {
     if (!/^tel[\s:]/i.test(lines[i])) continue
-    const prev1 = lines[i - 1]?.trim() ?? ''
-    const prev2 = i > 1 ? (lines[i - 2]?.trim() ?? '') : ''
-    if (isLatinName(prev1) && isLatinName(prev2)) {
-      return `${prev2} ${prev1}` // "noura noura"
+    const parts: string[] = []
+    for (let j = i - 1; j >= Math.max(0, i - 5); j--) {
+      const l = lines[j].trim()
+      if (/^#\d{4,}/.test(l)) {
+        // Extract name portion after the order number on same line (e.g. "#6207 noura")
+        const afterHash = l.replace(/^#\d+\s*/, '').trim()
+        if (isLatinName(afterHash)) parts.unshift(afterHash)
+        break
+      }
+      if (/^(hurrier|snoonu|rafeeq)/i.test(l)) break
+      if (isLatinName(l)) parts.unshift(l)  // valid name fragment
+      // else: skip badge/label/receipt words silently
     }
-    if (isLatinName(prev1)) return prev1
+    if (parts.length > 0) return parts.join(' ')
   }
 
-  // Hurrier: name on same line as order number "#6207 noura noura"
+  // ── Hurrier fallback: name on same line as "#6207 noura" ──────────────────
   for (const line of lines) {
     if (/^#\d{4,6}/.test(line)) {
       const afterHash = line.replace(/^#\d+\s*/, '').trim()
