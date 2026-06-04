@@ -20,8 +20,8 @@ export async function compressImage(file: File): Promise<string> {
     img.onload = () => {
       URL.revokeObjectURL(url)
       const canvas = document.createElement('canvas')
-      // Use a higher resolution for OCR — more pixels = better digit recognition
-      const MAX = 2000
+      // 1200px is optimal for receipt OCR — large enough for text, small enough to be fast
+      const MAX = 1200
       let { width, height } = img
       if (width > MAX || height > MAX) {
         if (width > height) { height = Math.round(height * MAX / width); width = MAX }
@@ -29,29 +29,10 @@ export async function compressImage(file: File): Promise<string> {
       }
       canvas.width = width; canvas.height = height
       const ctx = canvas.getContext('2d')!
-
-      // Step 1: draw original
+      // GPU-accelerated contrast boost — much faster than pixel loop
+      ctx.filter = 'contrast(1.4) grayscale(1) brightness(1.05)'
       ctx.drawImage(img, 0, 0, width, height)
-
-      // Step 2: enhance contrast for receipt text
-      // Receipts are typically black text on white — boost contrast significantly
-      const imageData = ctx.getImageData(0, 0, width, height)
-      const data = imageData.data
-      for (let i = 0; i < data.length; i += 4) {
-        // Convert to grayscale first
-        const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]
-        // Apply strong contrast: push dark pixels darker, light pixels lighter
-        // This helps separate digits like 5/8, 9/0 that look similar in grey
-        const enhanced = gray < 128
-          ? Math.max(0, gray - 40)      // darken text pixels
-          : Math.min(255, gray + 30)    // lighten background pixels
-        data[i] = enhanced
-        data[i + 1] = enhanced
-        data[i + 2] = enhanced
-      }
-      ctx.putImageData(imageData, 0, 0)
-
-      resolve(canvas.toDataURL('image/jpeg', 0.95))
+      resolve(canvas.toDataURL('image/jpeg', 0.88))
     }
     img.onerror = reject
     img.src = url
@@ -259,22 +240,30 @@ function findName(text: string): string {
   //          "#6207 noura / noura / TEL:" → "noura noura"
   //          "7099 Reem Youssef" (OCR missed #) → still extracted
   //          "#6970 / rodah almalki / pro / TEL:" → "rodah almalki" (skips pro)
+  //          Name appearing AFTER TEL: in OCR output (column ordering quirk)
   for (let i = 1; i < lines.length; i++) {
     if (!/^tel[\s:]/i.test(lines[i])) continue
     const parts: string[] = []
+
+    // Backwards scan (normal case — name appears before TEL:)
     for (let j = i - 1; j >= Math.max(0, i - 5); j--) {
       const l = lines[j].trim()
-
-      // Stop at order number lines — handles both "#7099 name" and "7099 name"
       if (/^#?\d{4,}/.test(l)) {
-        // Extract name after the order number (e.g. "#7099 Reem Youssef" or "7099 Reem Youssef")
         const afterNum = l.replace(/^#?\d+\s*/, '').trim()
         if (isLatinName(afterNum)) parts.unshift(afterNum)
         break
       }
       if (/^(hurrier|snoonu|rafeeq)/i.test(l)) break
       if (isLatinName(l)) parts.unshift(l)
-      // else: skip badge/label/receipt words
+    }
+    if (parts.length > 0) return parts.join(' ')
+
+    // Forward scan (fallback — Tesseract placed name AFTER TEL: due to column ordering)
+    for (let j = i + 1; j <= Math.min(i + 4, lines.length - 1); j++) {
+      const l = lines[j].trim()
+      // Stop at food items, prices, totals
+      if (/^(\d|qr|subtotal|total|delivery|no cutlery|may|order)/i.test(l)) break
+      if (isLatinName(l)) { parts.push(l); break }
     }
     if (parts.length > 0) return parts.join(' ')
   }
