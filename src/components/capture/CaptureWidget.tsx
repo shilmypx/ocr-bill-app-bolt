@@ -256,12 +256,11 @@ export function CaptureWidget() {
       // 2. If the raw OCR text near "customer" contains Arabic Unicode → clear
       //    (handles case where name OCRs as garbage but nearby "العميل" preserves Arabic)
       const extractedName = result.customerName || ''
+      // Trust findName() in ocr.ts — it already handles Arabic detection correctly.
+      // DON'T scan nearby raw text for Arabic: العميل appears after ALL Snoonu names
+      // (both Arabic and English), so that check would clear ALL English names too.
       const isLatinOnly = (s: string) => /^[a-zA-Z][a-zA-Z\s\-''.]*$/.test(s.trim())
-      const rawLower = (result.rawText || '').toLowerCase()
-      const custIdx = rawLower.indexOf('customer')
-      const nearCust = custIdx >= 0 ? result.rawText.slice(custIdx, custIdx + 200) : ''
-      const arabicNearName = /[\u0600-\u06FF]/.test(nearCust)
-      const cleanName = (isLatinOnly(extractedName) && !arabicNearName) ? extractedName : ''
+      const cleanName = isLatinOnly(extractedName) ? extractedName : ''
       const f = { code, num: local, name: cleanName }
       setForm(f)
       if (!local || !valid(code, local)) {

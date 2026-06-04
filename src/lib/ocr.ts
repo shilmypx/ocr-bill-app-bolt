@@ -204,7 +204,7 @@ function isLatinName(s: string): boolean {
   if (/^\d/.test(s) || /^\+/.test(s)) return false
   if (!/^[a-zA-Z][a-zA-Z\s\-''.]*$/.test(s)) return false
   // Reject known label / badge / receipt / address / food words
-  if (/^(customer|mobile|phone|tel|order|delivery|vendor|pickup|collection|hurrier|snoonu|rafeeq|no cutlery|subtotal|total|prepaid|not paid|pro|item|qty|qar|qr|price|note|address|street|building|floor|zone|apartment|payment|online|cash|thanks|thank|village|compound|district|road|avenue|block|sector|area|gate|paradise|skimmed|labnah|matcha|frappe|smoothie|raspberry|chocolate|crunchy|croissant|sandwich|cake|latte|cappuccino|espresso|coffee|juice|toast|honey|cream|milk|fat|waffle|pancake)/i.test(s)) return false
+  if (/^(customer|mobile|phone|tel|order|delivery|vendor|pickup|collection|hurrier|snoonu|rafeeq|no cutlery|subtotal|total|prepaid|not paid|pro|item|qty|qar|qr|price|note|address|street|building|floor|zone|apartment|payment|online|cash|thanks|thank|village|compound|district|road|avenue|block|sector|area|gate|paradise|skimmed|labnah|matcha|frappe|smoothie|raspberry|chocolate|crunchy|croissant|sandwich|cake|latte|cappuccino|espresso|coffee|juice|toast|honey|cream|milk|fat|waffle|pancake|platinum|member)/i.test(s)) return false
   return true
 }
 
@@ -231,25 +231,27 @@ function findName(text: string): string {
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
 
   // ── Snoonu/Rafeeq: "Customer: NAME" or "Customer (العميل): NAME" ──────────
+  // NOTE: ALL Snoonu bills have "العميل" on the next line regardless of whether
+  // the customer name is Arabic or English — so we ONLY check the name portion
+  // itself for Arabic, NOT the surrounding lines.
   for (let i = 0; i < lines.length; i++) {
     if (!/^customer[\s(:]/i.test(lines[i])) continue
 
-    // Detect Arabic context: if the current line OR the next line contains Arabic
-    // characters, the customer name is Arabic (even if OCR garbled it into Latin)
-    const lineArabic = /[\u0600-\u06FF]/.test(lines[i])
-    const nextArabic = i + 1 < lines.length && /[\u0600-\u06FF]/.test(lines[i + 1])
-    // Also check for common OCR outputs of "العميل" that still contain Arabic
-    const nextIsArabicLabel = i + 1 < lines.length &&
-      (/[\u0600-\u06FF]/.test(lines[i + 1]) || /^[Aa]l[-\s]?[Aa]m/.test(lines[i + 1]))
-
-    if (lineArabic || nextArabic || nextIsArabicLabel) return ''
-
-    // Name after colon on same line
+    // Extract name portion after the colon
     const afterColon = lines[i].replace(/^.*?:\s*/i, '').trim()
+
+    // Clear if the name itself contains Arabic Unicode characters
+    if (/[\u0600-\u06FF]/.test(afterColon)) return ''
+
+    // Clear if name contains non-ASCII garbage (OCR failed on Arabic)
+    if (afterColon && /[^\x20-\x7E]/.test(afterColon)) return ''
+
     if (isLatinName(afterColon)) return afterColon
 
     // Name on next line (Izghawa direct: "Customer:\nTee")
-    if (i + 1 < lines.length && isLatinName(lines[i + 1])) return lines[i + 1]
+    const nextLine = i + 1 < lines.length ? lines[i + 1].trim() : ''
+    // Only use next line if it's purely Latin (not Arabic label "العميل")
+    if (nextLine && !/[\u0600-\u06FF]/.test(nextLine) && isLatinName(nextLine)) return nextLine
   }
 
   // ── Hurrier: collect ALL fragments between #XXXX and TEL: ─────────────────
