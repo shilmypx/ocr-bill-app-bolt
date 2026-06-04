@@ -8,8 +8,9 @@ import { performOCR, compressImage, initTesseractWorker } from '@/lib/ocr'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import type { OCRResult } from '@/types'
+import { BatchCapture } from '@/components/capture/BatchCapture'
 
-type CaptureMode = 'camera' | 'upload' | 'manual'
+type CaptureMode = 'camera' | 'upload' | 'manual' | 'batch'
 type OCRMode = 'fast' | 'ai'
 type Phase = 'idle' | 'processing' | 'review' | 'success' | 'error'
 
@@ -420,10 +421,11 @@ export function CaptureWidget() {
     <div className="w-full max-w-lg mx-auto">
       {/* Tabs */}
       <div className="flex gap-1 mb-4 bg-gray-100 dark:bg-gray-800 p-1 rounded-xl">
-        {(['camera', 'upload', 'manual'] as CaptureMode[]).map(m => (
+        {(['camera', 'upload', 'manual', 'batch'] as CaptureMode[]).map(m => (
           <button key={m} onClick={() => { setMode(m); reset() }}
             className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${mode === m ? 'bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400 shadow-sm' : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}`}>
-            {m === 'camera' ? '📷 Camera' : m === 'upload' ? '📁 Upload' : '✏️ Entry'}
+            {m === 'camera' ? '📷' : m === 'upload' ? '📁' : m === 'batch' ? '📦 Batch' : '✏️'}
+            {m !== 'batch' && <span className="hidden sm:inline ml-1">{m === 'camera' ? 'Camera' : m === 'upload' ? 'Upload' : 'Entry'}</span>}
           </button>
         ))}
       </div>
@@ -562,6 +564,8 @@ export function CaptureWidget() {
           {!canSave && form.num && <p className="text-xs text-center text-red-500 mt-2">Enter at least 8 digits after country code</p>}
         </CardContent></Card>
       )}
+      {/* BATCH MODE */}
+      {mode === 'batch' && <BatchCapture />}
     </div>
   )
 }
