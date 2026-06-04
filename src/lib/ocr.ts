@@ -21,7 +21,7 @@ export async function compressImage(file: File): Promise<string> {
       URL.revokeObjectURL(url)
       const canvas = document.createElement('canvas')
       // 1200px is optimal for receipt OCR — large enough for text, small enough to be fast
-      const MAX = 1200
+      const MAX = 900   // 900px is optimal — faster Tesseract, same receipt quality
       let { width, height } = img
       if (width > MAX || height > MAX) {
         if (width > height) { height = Math.round(height * MAX / width); width = MAX }
@@ -245,6 +245,11 @@ function findName(text: string): string {
 
     // Clear if name contains non-ASCII garbage (OCR failed on Arabic)
     if (afterColon && /[^\x20-\x7E]/.test(afterColon)) return ''
+
+    // Clear very short names (≤3 chars) on Arabic-context bills — likely OCR misread
+    // e.g. Tesseract reads Arabic "جيو" as "Jio". Real short English names are ≥4 chars.
+    const billHasArabic = /[\u0600-\u06FF]/.test(text)
+    if (afterColon && afterColon.length <= 3 && billHasArabic) return ''
 
     if (isLatinName(afterColon)) return afterColon
 
