@@ -74,13 +74,14 @@ function parseOCRPhone(raw: string): { code: string; local: string } {
 // ── Shared UI components ───────────────────────────────────────────────────────
 
 // Read-only name display (no input = no auto-fill conflict)
-function NameField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+function NameField({ value, onChange, id }: { value: string; onChange: (v: string) => void; id?: string }) {
   return (
     <div>
       <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
         Customer Name
       </label>
       <input
+        id={id}
         type="text"
         value={value}
         onChange={e => onChange(e.target.value)}
@@ -94,10 +95,10 @@ function NameField({ value, onChange }: { value: string; onChange: (v: string) =
 
 // Editable phone input with per-field red highlighting
 // Code box: red if not +974 | Number box: red if not exactly 8 digits
-function PhoneInput({ code, num, onCode, onNum, autoFocus }: {
+function PhoneInput({ code, num, onCode, onNum, autoFocus, numId }: {
   code: string; num: string
   onCode: (v: string) => void; onNum: (v: string) => void
-  autoFocus?: boolean
+  autoFocus?: boolean; numId?: string
 }) {
   const digits = num.replace(/\D/g, '')
   const codeOk = codeValid(code)
@@ -126,6 +127,7 @@ function PhoneInput({ code, num, onCode, onNum, autoFocus }: {
         />
         {/* Number box — red text if not 8 digits */}
         <input
+          id={numId}
           type="tel"
           value={num}
           autoFocus={autoFocus}
@@ -164,10 +166,19 @@ export function CaptureWidget() {
   const [facing, setFacing] = useState<'environment' | 'user'>('environment')
   const [fullscreen, setFullscreen] = useState(false)
   const [isDup, setIsDup] = useState(false)
+  // Derived: is the current form valid to save? (computed eagerly for effects)
+  const canSave = valid(form.code, form.num)
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const wasFull = useRef(false)
+  // Auto-capture
+  const [autoCapture, setAutoCapture] = useState(false)
+  const [autoStatus, setAutoStatus] = useState<'waiting'|'scanning'>('waiting')
+  const autoLock = useRef(false)
+  // Smart focus refs (used via element IDs)
+  const saveRefNormal = useRef<HTMLButtonElement>(null)
+  const saveRefFull = useRef<HTMLButtonElement>(null)
 
   useEffect(() => { initTesseractWorker() }, [])
 
@@ -189,6 +200,23 @@ export function CaptureWidget() {
 
   // Pre-warm Tesseract on mount — eliminates 2-3 second cold-start when first bill scanned
   useEffect(() => { initTesseractWorker().catch(() => {}) }, [])
+
+  // Smart focus: when phase becomes 'review', focus the first missing field
+  // or the Save button if everything is valid. form is already set by this point.
+  useEffect(() => {
+    if (phase !== 'review') return
+    const t = setTimeout(() => {
+      if (!form.name.trim()) {
+        (document.getElementById('rv-name') as HTMLInputElement)?.focus()
+      } else if (!numValid(form.num)) {
+        (document.getElementById('rv-num') as HTMLInputElement)?.focus()
+      } else {
+        (document.getElementById('rv-save') as HTMLButtonElement)?.focus()
+      }
+    }, 150)
+    return () => clearTimeout(t)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase])
 
   useEffect(() => {
     if (mode === 'camera' && phase === 'idle' && !fullscreen) startCam()
@@ -296,6 +324,48 @@ export function CaptureWidget() {
     if (fileRef.current) fileRef.current.value = ''
   }, [runOCR])
 
+  // Enter key in name/number inputs → save if valid
+  useEffect(() => {
+    if (phase !== 'review') return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Enter') return
+      const tag = (e.target as HTMLElement)?.tagName
+      if (tag === 'INPUT' && canSave) { e.preventDefault(); save(form, ocr || undefined) }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [phase, canSave, form, ocr, save])
+
+  // Auto-capture: scan live camera frame every ~3s; auto-trigger when phone detected
+  useEffect(() => {
+    if (!autoCapture || phase !== 'idle' || !camActive) return
+    const interval = setInterval(async () => {
+      if (autoLock.current || !videoRef.current || videoRef.current.videoWidth === 0) return
+      autoLock.current = true; setAutoStatus('scanning')
+      try {
+        const vid = videoRef.current
+        const canvas = document.createElement('canvas')
+        // Use 60% scale for quick scan (smaller = faster OCR)
+        canvas.width = Math.round(vid.videoWidth * 0.6)
+        canvas.height = Math.round(vid.videoHeight * 0.6)
+        const ctx = canvas.getContext('2d')!
+        ctx.filter = 'contrast(1.3) grayscale(1)'
+        ctx.drawImage(vid, 0, 0, canvas.width, canvas.height)
+        const img = canvas.toDataURL('image/jpeg', 0.82)
+        const result = await performOCR(img, 'fast')
+        const { code, local } = parseOCRPhone(result.contactNumber || '')
+        if (codeValid(code) && numValid(local)) {
+          // Valid phone found → auto-capture full quality
+          clearInterval(interval)
+          setAutoStatus('waiting')
+          capture()
+        }
+      } catch { /* ignore scan errors */ }
+      finally { autoLock.current = false; setAutoStatus('waiting') }
+    }, 3000)
+    return () => { clearInterval(interval); setAutoStatus('waiting'); autoLock.current = false }
+  }, [autoCapture, phase, camActive, capture])
+
   const retake = () => {
     // If user was in fullscreen before capture, go straight back to fullscreen
     if (wasFull.current) {
@@ -307,7 +377,6 @@ export function CaptureWidget() {
       if (mode === 'camera') startCam()
     }
   }
-  const canSave = valid(form.code, form.num)
 
   // ── FULLSCREEN ─────────────────────────────────────────────────────────────
   if (fullscreen && mode === 'camera') return (
@@ -328,6 +397,17 @@ export function CaptureWidget() {
         <button onClick={() => { setFullscreen(false); wasFull.current = false }}
           className="bg-black/60 p-3 rounded-full text-white"><Minimize2 className="h-5 w-5" /></button>
       </div>
+
+      {/* Auto-capture toggle — top left */}
+      {phase === 'idle' && (
+        <div className="absolute top-4 left-4 z-10">
+          <button onClick={() => setAutoCapture(a => !a)}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-full text-xs font-semibold transition-all ${autoCapture ? 'bg-green-500 text-white' : 'bg-black/60 text-gray-300'}`}>
+            <span className={`w-2 h-2 rounded-full ${autoCapture ? 'bg-white animate-pulse' : 'bg-gray-500'}`} />
+            {autoCapture ? (autoStatus === 'scanning' ? '🔍 Scanning...' : '⚡ Auto ON') : '⚡ Auto OFF'}
+          </button>
+        </div>
+      )}
 
       {/* Processing */}
       {phase === 'processing' && (
@@ -372,6 +452,7 @@ export function CaptureWidget() {
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">Customer Name</label>
                 <input
+                  id="rv-name"
                   type="text"
                   value={form.name}
                   onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
@@ -390,7 +471,7 @@ export function CaptureWidget() {
                   <input value={form.code} onChange={e => setForm(f => ({ ...f, code: e.target.value }))}
                     autoComplete="off"
                     className="w-[72px] px-2 py-2.5 text-center text-sm font-mono font-bold bg-gray-700 text-white border-r border-gray-600 focus:outline-none" />
-                  <input type="tel" value={form.num} autoFocus={phase === 'error'}
+                  <input id="rv-num" type="tel" value={form.num} autoFocus={phase === 'error'}
                     autoComplete="off"
                     onChange={e => setForm(f => ({ ...f, num: e.target.value.replace(/\D/g, '').slice(0, 10) }))}
                     placeholder="41105663"
@@ -412,7 +493,7 @@ export function CaptureWidget() {
                   className="flex-1 py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-xl text-sm font-medium flex items-center justify-center gap-1.5">
                   <RotateCcw className="h-4 w-4" /> Retake
                 </button>
-                <button onClick={() => save(form, ocr || undefined)} disabled={!canSave || saving}
+                <button id="rv-save" ref={saveRefFull} onClick={() => save(form, ocr || undefined)} disabled={!canSave || saving}
                   className={`flex-1 py-3 rounded-xl text-sm font-medium flex items-center justify-center gap-1.5 ${canSave && !saving ? 'bg-blue-600 hover:bg-blue-500 text-white' : 'bg-gray-700 text-gray-500 cursor-not-allowed'}`}>
                   {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                   Save
@@ -479,7 +560,14 @@ export function CaptureWidget() {
           </div>
           <div className="p-4 space-y-2">
             <Button onClick={capture} className="w-full" size="lg" disabled={!camActive}><Camera className="h-5 w-5" />Capture Bill</Button>
-            <button onClick={() => { wasFull.current = true; setFullscreen(true) }} className="w-full py-1.5 text-xs text-blue-600 dark:text-blue-400 font-medium flex items-center justify-center gap-1"><Maximize2 className="h-3 w-3" />Open Fullscreen</button>
+            <div className="flex gap-2">
+              <button onClick={() => { wasFull.current = true; setFullscreen(true) }} className="flex-1 py-1.5 text-xs text-blue-600 dark:text-blue-400 font-medium flex items-center justify-center gap-1"><Maximize2 className="h-3 w-3" />Fullscreen</button>
+              <button onClick={() => setAutoCapture(a => !a)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${autoCapture ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400'}`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${autoCapture ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`} />
+                {autoCapture ? (autoStatus === 'scanning' ? 'Scanning...' : 'Auto ON') : 'Auto'}
+              </button>
+            </div>
           </div>
         </CardContent></Card>
       )}
@@ -527,12 +615,12 @@ export function CaptureWidget() {
           </div>
 
           <div className="space-y-3">
-            <NameField value={form.name} onChange={v => setForm(f => ({ ...f, name: v }))} />
-            <PhoneInput code={form.code} num={form.num} onCode={v => setForm(f => ({ ...f, code: v }))} onNum={v => setForm(f => ({ ...f, num: v }))} />
+            <NameField id="rv-name" value={form.name} onChange={v => setForm(f => ({ ...f, name: v }))} />
+            <PhoneInput numId="rv-num" code={form.code} num={form.num} onCode={v => setForm(f => ({ ...f, code: v }))} onNum={v => setForm(f => ({ ...f, num: v }))} />
           </div>
           <div className="flex gap-2 mt-4">
             <Button variant="outline" onClick={retake} className="flex-1" disabled={saving}><RotateCcw className="h-4 w-4" />Retake</Button>
-            <Button onClick={() => save(form, ocr || undefined)} loading={saving} disabled={!canSave} className="flex-1">Save Record</Button>
+            <Button id="rv-save" ref={saveRefNormal} onClick={() => save(form, ocr || undefined)} loading={saving} disabled={!canSave} className="flex-1">Save Record</Button>
           </div>
         </CardContent></Card>
       )}
