@@ -13,25 +13,26 @@ export async function initTesseractWorker() {
   } catch (e) { console.warn('Tesseract init failed:', e) }
 }
 
-export async function compressImage(file: File): Promise<string> {
+// cropFraction: top portion of image to keep (0.45 = top 45%, 3x faster for Hurrier)
+export async function compressImage(file: File, cropFraction = 1.0): Promise<string> {
   return new Promise((resolve, reject) => {
     const img = new Image()
     const url = URL.createObjectURL(file)
     img.onload = () => {
       URL.revokeObjectURL(url)
       const canvas = document.createElement('canvas')
-      // 1200px is optimal for receipt OCR — large enough for text, small enough to be fast
-      const MAX = 900   // 900px is optimal — faster Tesseract, same receipt quality
-      let { width, height } = img
-      if (width > MAX || height > MAX) {
-        if (width > height) { height = Math.round(height * MAX / width); width = MAX }
-        else { width = Math.round(width * MAX / height); height = MAX }
+      const MAX = cropFraction < 1 ? 800 : 900
+      const srcW = img.naturalWidth, srcH = img.naturalHeight
+      const cropH = Math.round(srcH * cropFraction)
+      let dstW = srcW, dstH = cropH
+      if (dstW > MAX || dstH > MAX) {
+        if (dstW > dstH) { dstH = Math.round(dstH * MAX / dstW); dstW = MAX }
+        else { dstW = Math.round(dstW * MAX / dstH); dstH = MAX }
       }
-      canvas.width = width; canvas.height = height
+      canvas.width = dstW; canvas.height = dstH
       const ctx = canvas.getContext('2d')!
-      // GPU-accelerated contrast boost — much faster than pixel loop
       ctx.filter = 'contrast(1.4) grayscale(1) brightness(1.05)'
-      ctx.drawImage(img, 0, 0, width, height)
+      ctx.drawImage(img, 0, 0, srcW, cropH, 0, 0, dstW, dstH)
       resolve(canvas.toDataURL('image/jpeg', 0.88))
     }
     img.onerror = reject

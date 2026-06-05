@@ -92,8 +92,8 @@ function NameField({ value, onChange, id }: { value: string; onChange: (v: strin
         />
         {value && (
           <button type="button" onClick={() => { onChange(''); setTimeout(() => { (document.getElementById(id || '') as HTMLInputElement)?.focus() }, 0) }}
-            className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-500 transition-colors p-0.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700">
-            <X className="h-3.5 w-3.5" />
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center rounded-full bg-gray-300 dark:bg-gray-500 hover:bg-red-400 dark:hover:bg-red-500 transition-colors">
+            <X className="h-3 w-3 text-white" />
           </button>
         )}
       </div>
@@ -180,6 +180,8 @@ export function CaptureWidget() {
   const streamRef = useRef<MediaStream | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const wasFull = useRef(false)
+  // Hurrier mode — optimised crop + extraction
+  const [hurrierMode, setHurrierMode] = useState(false)
   // Auto-capture
   const [autoCapture, setAutoCapture] = useState(false)
   const [autoStatus, setAutoStatus] = useState<'waiting'|'scanning'>('waiting')
@@ -318,19 +320,23 @@ export function CaptureWidget() {
   const capture = useCallback(() => {
     if (!videoRef.current || !camActive) return
     wasFull.current = fullscreen
+    const vid = videoRef.current
+    const srcW = vid.videoWidth, srcH = vid.videoHeight
+    // Hurrier: crop to top 45% — name+TEL: always in that region, 2-3x faster OCR
+    const cropH = hurrierMode ? Math.round(srcH * 0.45) : srcH
     const c = document.createElement('canvas')
-    c.width = videoRef.current.videoWidth; c.height = videoRef.current.videoHeight
-    c.getContext('2d')!.drawImage(videoRef.current, 0, 0)
+    c.width = srcW; c.height = cropH
+    c.getContext('2d')!.drawImage(vid, 0, 0, srcW, srcH, 0, 0, srcW, cropH)
     setFullscreen(false); stopCam()
     runOCR(c.toDataURL('image/jpeg', 0.9))
-  }, [camActive, fullscreen, stopCam, runOCR])
+  }, [camActive, fullscreen, hurrierMode, stopCam, runOCR])
 
   const handleFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return
-    try { await runOCR(await compressImage(file)) }
+    try { await runOCR(await compressImage(file, hurrierMode ? 0.45 : 1.0)) }
     catch { toast('error', 'Failed to read image') }
     if (fileRef.current) fileRef.current.value = ''
-  }, [runOCR])
+  }, [runOCR, hurrierMode])
 
   // Enter key in name/number inputs → save if valid
   useEffect(() => {
@@ -406,9 +412,13 @@ export function CaptureWidget() {
           className="bg-black/60 p-3 rounded-full text-white"><Minimize2 className="h-5 w-5" /></button>
       </div>
 
-      {/* Auto-capture toggle — top left */}
+      {/* Top-left toggles: Hurrier mode + Auto-capture */}
       {phase === 'idle' && (
-        <div className="absolute top-4 left-4 z-10">
+        <div className="absolute top-4 left-4 z-10 flex flex-col gap-2">
+          <button onClick={() => setHurrierMode(h => !h)}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-full text-xs font-semibold transition-all ${hurrierMode ? 'bg-orange-500 text-white' : 'bg-black/60 text-gray-300'}`}>
+            🚚 {hurrierMode ? 'Hurrier ON' : 'Hurrier'}
+          </button>
           <button onClick={() => setAutoCapture(a => !a)}
             className={`flex items-center gap-1.5 px-3 py-2 rounded-full text-xs font-semibold transition-all ${autoCapture ? 'bg-green-500 text-white' : 'bg-black/60 text-gray-300'}`}>
             <span className={`w-2 h-2 rounded-full ${autoCapture ? 'bg-white animate-pulse' : 'bg-gray-500'}`} />
@@ -471,8 +481,8 @@ export function CaptureWidget() {
                   />
                   {form.name && (
                     <button type="button" onClick={() => { setForm(f => ({ ...f, name: '' })); setTimeout(() => { (document.getElementById('rv-name') as HTMLInputElement)?.focus() }, 0) }}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-red-400 transition-colors">
-                      <X className="h-3.5 w-3.5" />
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center rounded-full bg-gray-500 hover:bg-red-500 transition-colors">
+                      <X className="h-3 w-3 text-white" />
                     </button>
                   )}
                 </div>
@@ -546,11 +556,17 @@ export function CaptureWidget() {
         ))}
       </div>
 
-      {/* OCR mode */}
-      {mode !== 'manual' && (
-        <div className="flex items-center gap-3 mb-4 p-3 bg-gray-50 dark:bg-gray-700/40 rounded-xl border border-gray-200 dark:border-gray-700">
+      {/* OCR mode + Hurrier toggle */}
+      {mode !== 'manual' && mode !== 'batch' && (
+        <div className="flex items-center gap-2 mb-4 p-3 bg-gray-50 dark:bg-gray-700/40 rounded-xl border border-gray-200 dark:border-gray-700">
           <Zap className="h-4 w-4 text-blue-500 shrink-0" />
           <span className="text-sm text-gray-600 dark:text-gray-400 flex-1">OCR Mode</span>
+          {/* Hurrier mode toggle */}
+          <button onClick={() => setHurrierMode(h => !h)}
+            title="Hurrier bills: crops to top 45% for 3x faster scan"
+            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${hurrierMode ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400 ring-1 ring-orange-400' : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400'}`}>
+            🚚 {hurrierMode ? 'Hurrier ON' : 'Hurrier'}
+          </button>
           <button onClick={() => setOcrMode(m => m === 'fast' ? 'ai' : 'fast')}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold ${ocrMode === 'ai' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'}`}>
             {ocrMode === 'ai' ? <><Brain className="h-3.5 w-3.5" />AI</> : <><Zap className="h-3.5 w-3.5" />Fast</>}
