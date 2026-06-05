@@ -1,6 +1,6 @@
 'use client'
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { Camera, Edit3, Zap, Brain, RotateCcw, CheckCircle, AlertCircle, Loader2, Maximize2, Minimize2, FlipHorizontal, Upload } from 'lucide-react'
+import { Camera, Edit3, Zap, Brain, RotateCcw, CheckCircle, AlertCircle, Loader2, Maximize2, Minimize2, FlipHorizontal, Upload, X } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Card, CardContent } from '@/components/ui/Card'
 import { toast } from '@/components/ui/Toast'
@@ -80,15 +80,23 @@ function NameField({ value, onChange, id }: { value: string; onChange: (v: strin
       <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
         Customer Name
       </label>
-      <input
-        id={id}
-        type="text"
-        value={value}
-        onChange={e => onChange(e.target.value)}
-        placeholder="Customer name"
-        autoComplete="off"
-        className="w-full px-3 py-2.5 rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-      />
+      <div className="relative">
+        <input
+          id={id}
+          type="text"
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          placeholder="Customer name"
+          autoComplete="off"
+          className={`w-full px-3 py-2.5 rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 ${value ? 'pr-8' : ''}`}
+        />
+        {value && (
+          <button type="button" onClick={() => { onChange(''); setTimeout(() => { (document.getElementById(id || '') as HTMLInputElement)?.focus() }, 0) }}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-500 transition-colors p-0.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
     </div>
   )
 }
@@ -451,15 +459,23 @@ export function CaptureWidget() {
               {/* Customer Name: editable input */}
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">Customer Name</label>
-                <input
-                  id="rv-name"
-                  type="text"
-                  value={form.name}
-                  onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-                  placeholder="Customer name"
-                  autoComplete="off"
-                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
-                />
+                <div className="relative">
+                  <input
+                    id="rv-name"
+                    type="text"
+                    value={form.name}
+                    onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                    placeholder="Customer name"
+                    autoComplete="off"
+                    className={`w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 ${form.name ? 'pr-7' : ''}`}
+                  />
+                  {form.name && (
+                    <button type="button" onClick={() => { setForm(f => ({ ...f, name: '' })); setTimeout(() => { (document.getElementById('rv-name') as HTMLInputElement)?.focus() }, 0) }}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-red-400 transition-colors">
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Contact Number: editable */}

@@ -294,7 +294,10 @@ function findName(text: string): string {
       }
       // Skip receipt structure words
       if (/^(hurrier|snoonu|rafeeq|collection|prepaid|not paid|pickup|at\b|am\b|pm\b|no cutlery|subtotal|total|delivery|order nr|pro\b)/i.test(l)) continue
-      // Skip pure digit lines (times like "5:21", partial phone fragments handled elsewhere)
+      // Skip address prepositions / articles that appear in delivery notes
+      // e.g. "in front of qatar energy", "The entrance of the building"
+      if (/^(in\b|of\b|the\b|at\b|by\b|on\b|to\b|for\b|from\b|and\b|with\b|between\b|front\b|gate\b|your\b|is\b|no\b)/i.test(l)) continue
+      // Skip pure digit lines (times, partial phone fragments)
       if (/^[\d:]+$/.test(l)) continue
       // Skip Arabic text
       if (/[\u0600-\u06FF]/.test(l)) continue
