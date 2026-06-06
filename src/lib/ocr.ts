@@ -128,21 +128,28 @@ function snoonuExtract(lines: string[], billHasArabic: boolean): { name: string;
   let name = ''
   let phone = ''
 
-  // Name: check only if afterColon itself is Arabic/garbage
+  // Name: robust — accept any separator OCR might produce after "Customer"
+  // Handles: "Customer: NAME", "Customer | NAME", "Customer, NAME", "Customer NAME"
   for (const line of lines) {
-    if (!/^customer[\s(:]/i.test(line)) continue
-    const after = line.replace(/^.*?:\s*/i, '').trim()
+    // Must start with "customer" (word boundary — rejects "Customers:", "CustomerID" etc.)
+    if (!/^customer\b/i.test(line)) continue
+    // Extract everything after the first non-letter separator
+    const after = line.replace(/^customer[^a-zA-Z\u0600-\u06FF]*/i, '').trim()
     if (!after) continue
-    if (/[\u0600-\u06FF]/.test(after) || /[^\x20-\x7E]/.test(after)) break // Arabic → clear
-    if (billHasArabic && after.length <= 3) break // short OCR garbage
+    // Skip Arabic names and non-ASCII garbage
+    if (/[\u0600-\u06FF]/.test(after) || /[^\x20-\x7E]/.test(after)) { name = ''; break }
+    // Clear very short names on Arabic-context bills (OCR garbage)
+    if (billHasArabic && after.length <= 3) { name = ''; break }
     if (isLatinName(after)) { name = after; break }
   }
 
-  // Phone: "Customer Phone:" label only
+  // Phone: "Customer Phone:" label — also handles next-line split and هاتف العميل context
   for (let i = 0; i < lines.length; i++) {
-    if (!/customer\s*phone/i.test(lines[i])) continue
+    if (!/customer\s*phone|هاتف/i.test(lines[i])) continue
     const candidates = [...(lines[i].match(PHONE_TOKEN) || [])]
-    for (let j = i+1; j <= i+2 && j < lines.length; j++) {
+    // Check up to 3 next lines for split phone numbers
+    for (let j = i+1; j <= i+3 && j < lines.length; j++) {
+      if (/^[\u0600-\u06FF]/.test(lines[j])) break // stop at Arabic label
       candidates.push(...(lines[j].match(PHONE_TOKEN) || []))
     }
     for (const m of candidates) { const p = normalisePhone(m); if (p) { phone = p.full; break } }
@@ -161,8 +168,8 @@ function rafeeqExtract(lines: string[]): { name: string; phone: string } {
 
   // Name
   for (const line of lines) {
-    if (!/^customer[\s(:]/i.test(line)) continue
-    const after = line.replace(/^.*?:\s*/i, '').trim()
+    if (!/^customer\b/i.test(line)) continue
+    const after = line.replace(/^customer[^a-zA-Z\u0600-\u06FF]*/i, '').trim()
     if (!after) continue
     if (/[\u0600-\u06FF]/.test(after) || /[^\x20-\x7E]/.test(after)) break
     if (isLatinName(after)) { name = after; break }

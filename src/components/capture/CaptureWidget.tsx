@@ -663,9 +663,9 @@ export function CaptureWidget() {
 
           {/* Compact number verification — inline banner */}
           <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700 rounded-lg mb-3">
-            <span className="text-xs text-amber-600 dark:text-amber-400 font-medium shrink-0">⚠️ Check name &amp; number:</span>
+            <span className="text-xs text-amber-600 dark:text-amber-400 font-medium shrink-0">⚠️ Verify:</span>
             <span className="text-base font-mono font-bold text-blue-800 dark:text-blue-200 flex-1 truncate">
-              {form.code}{form.num || '—'}
+              {form.code ? `${form.code} ${form.num || '—'}` : form.num || '—'}
             </span>
           </div>
 
