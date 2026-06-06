@@ -17,16 +17,19 @@ export async function initTesseractWorker() {
 }
 
 // cropFraction: top portion to keep (Hurrier: top 45% = 3x faster, name always in top section)
-export async function compressImage(file: File, cropFraction = 1.0): Promise<string> {
+// hStartFraction: 0=full width, 0.4=crop left 40% (right 60% only — used for Hurrier)
+export async function compressImage(file: File, cropFraction = 1.0, hStartFraction = 0): Promise<string> {
   return new Promise((resolve, reject) => {
     const img = new Image()
     const url = URL.createObjectURL(file)
     img.onload = () => {
       URL.revokeObjectURL(url)
-      const MAX = cropFraction < 1 ? 800 : 900
+      const MAX = (cropFraction < 1 || hStartFraction > 0) ? 800 : 900
       const srcW = img.naturalWidth, srcH = img.naturalHeight
+      const srcX = Math.round(srcW * hStartFraction)   // horizontal crop start
+      const srcCropW = srcW - srcX                      // width of cropped region
       const cropH = Math.round(srcH * cropFraction)
-      let dstW = srcW, dstH = cropH
+      let dstW = srcCropW, dstH = cropH
       if (dstW > MAX || dstH > MAX) {
         if (dstW > dstH) { dstH = Math.round(dstH * MAX / dstW); dstW = MAX }
         else { dstW = Math.round(dstW * MAX / dstH); dstH = MAX }
@@ -34,12 +37,34 @@ export async function compressImage(file: File, cropFraction = 1.0): Promise<str
       const canvas = document.createElement('canvas')
       canvas.width = dstW; canvas.height = dstH
       const ctx = canvas.getContext('2d')!
-      ctx.filter = 'contrast(1.4) grayscale(1) brightness(1.05)'
-      ctx.drawImage(img, 0, 0, srcW, cropH, 0, 0, dstW, dstH)
-      resolve(canvas.toDataURL('image/jpeg', 0.88))
+      ctx.filter = 'contrast(1.5) grayscale(1) brightness(1.05)'
+      ctx.drawImage(img, srcX, 0, srcCropW, cropH, 0, 0, dstW, dstH)
+      resolve(canvas.toDataURL('image/jpeg', 0.92))
     }
     img.onerror = reject
     img.src = url
+  })
+}
+
+// Crop a base64 imageData to the right portion — used for Hurrier camera captures
+// Removes the large left-column order number so Tesseract only sees the right column text
+export async function cropRightColumn(imageData: string, hStart = 0.40, vEnd = 0.60): Promise<string> {
+  if (typeof window === 'undefined') return imageData
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => {
+      const srcX = Math.round(img.width * hStart)
+      const srcW = img.width - srcX
+      const srcH = Math.round(img.height * vEnd)
+      const canvas = document.createElement('canvas')
+      canvas.width = srcW; canvas.height = srcH
+      const ctx = canvas.getContext('2d')!
+      ctx.filter = 'contrast(1.5) grayscale(1) brightness(1.05)'
+      ctx.drawImage(img, srcX, 0, srcW, srcH, 0, 0, srcW, srcH)
+      resolve(canvas.toDataURL('image/jpeg', 0.92))
+    }
+    img.onerror = () => resolve(imageData)  // fallback to original on error
+    img.src = imageData
   })
 }
 
@@ -433,57 +458,23 @@ export function parseOCRPhone(raw: string): { code: string; local: string; full:
   return p || { code: '+974', local: '', full: '' }
 }
 
-// ── Hurrier Vision API: uses Claude Vision when partner=hurrier ───────────────
-// Tesseract cannot reliably parse Hurrier's two-column layout.
-// This calls /api/hurrier-vision which uses Claude Vision API for semantic extraction.
-async function hurrierVisionExtract(imageData: string): Promise<{ name: string; phone: string }> {
-  try {
-    const res = await fetch('/api/hurrier-vision', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ imageData }),
-    })
-    if (!res.ok) throw new Error(`Vision API ${res.status}`)
-    const data = await res.json()
-    return { name: data.customerName || '', phone: data.contactNumber || '' }
-  } catch (e) {
-    console.warn('Vision API failed, falling back to Tesseract:', e)
-    return { name: '', phone: '' }
-  }
-}
-
 // ── Main OCR entry point ──────────────────────────────────────────────────────
 export async function performOCR(
   imageData: string,
   _mode: 'fast' | 'ai' = 'fast',
   partner: BillPartner = 'standard'
 ): Promise<OCRResult> {
-  // Hurrier: always use Claude Vision API — Tesseract cannot handle the two-column layout
-  if (partner === 'hurrier') {
-    const vision = await hurrierVisionExtract(imageData)
-    // Also run Tesseract to get order number, date, etc. (but use Vision for name/phone)
-    if (!workerReady || !worker) await initTesseractWorker()
-    let raw = ''
-    try {
-      const { data } = await worker.recognize(imageData)
-      raw = data?.text || ''
-    } catch { /* use empty raw */ }
-    return {
-      customerName:    vision.name,
-      contactNumber:   vision.phone,
-      orderNumber:     findOrderNumber(raw),
-      billDate:        findDate(raw),
-      restaurant:      findRestaurant(raw),
-      address:         '',
-      deliveryPartner: 'hurrier',
-      rawText:         raw,
-      confidence:      vision.name || vision.phone ? 95 : 0,
-    }
-  }
-
   if (!workerReady || !worker) await initTesseractWorker()
+
+  // Hurrier: crop to right 60% × top 60% BEFORE Tesseract to remove the large
+  // left-column order number (#7086) that confuses Tesseract's column detection.
+  // This is free — no API cost. cropRightColumn returns a focused single-column image.
+  const ocrImage = (partner === 'hurrier')
+    ? await cropRightColumn(imageData, 0.40, 0.60)
+    : imageData
+
   try {
-    const { data } = await worker.recognize(imageData)
+    const { data } = await worker.recognize(ocrImage)
     const raw: string = data?.text || ''
     const confidence: number = data?.confidence || 0
     const lines = raw.split('\n').map((l: string) => l.trim()).filter(Boolean)
@@ -494,6 +485,7 @@ export async function performOCR(
     switch (partner) {
       case 'snoonu':  extracted = snoonuExtract(lines, billHasArabic); break
       case 'rafeeq':  extracted = rafeeqExtract(lines); break
+      case 'hurrier': extracted = hurrierExtract(lines); break
       case 'direct':  extracted = directExtract(lines); break
       default:        extracted = standardExtract(lines, raw); break
     }
@@ -505,7 +497,7 @@ export async function performOCR(
       billDate:        findDate(raw),
       restaurant:      findRestaurant(raw),
       address:         '',
-      deliveryPartner: findPartner(raw),
+      deliveryPartner: partner === 'hurrier' ? 'hurrier' : findPartner(raw),
       rawText:         raw,
       confidence,
     }

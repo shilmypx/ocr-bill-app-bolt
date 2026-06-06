@@ -4,7 +4,7 @@ import { Camera, Edit3, Zap, Brain, RotateCcw, CheckCircle, AlertCircle, Loader2
 import { Button } from '@/components/ui/Button'
 import { Card, CardContent } from '@/components/ui/Card'
 import { toast } from '@/components/ui/Toast'
-import { performOCR, compressImage, initTesseractWorker, type BillPartner } from '@/lib/ocr'
+import { performOCR, compressImage, cropRightColumn, initTesseractWorker, type BillPartner } from '@/lib/ocr'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import type { OCRResult } from '@/types'
@@ -344,7 +344,7 @@ export function CaptureWidget() {
 
   const handleFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return
-    try { await runOCR(await compressImage(file, partner === 'hurrier' ? 0.50 : 1.0)) }
+    try { await runOCR(await compressImage(file, partner === 'hurrier' ? 0.60 : 1.0, partner === 'hurrier' ? 0.40 : 0)) }
     catch { toast('error', 'Failed to read image') }
     if (fileRef.current) fileRef.current.value = ''
   }, [runOCR, partner])
