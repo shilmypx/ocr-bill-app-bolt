@@ -4,7 +4,7 @@ import { Camera, Edit3, Zap, Brain, RotateCcw, CheckCircle, AlertCircle, Loader2
 import { Button } from '@/components/ui/Button'
 import { Card, CardContent } from '@/components/ui/Card'
 import { toast } from '@/components/ui/Toast'
-import { performOCR, compressImage, initTesseractWorker } from '@/lib/ocr'
+import { performOCR, compressImage, initTesseractWorker, type BillPartner } from '@/lib/ocr'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import type { OCRResult } from '@/types'
@@ -180,8 +180,8 @@ export function CaptureWidget() {
   const streamRef = useRef<MediaStream | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const wasFull = useRef(false)
-  // Hurrier mode — optimised crop + extraction
-  const [hurrierMode, setHurrierMode] = useState(false)
+  // Partner selection — drives specific OCR extractor + crop strategy
+  const [partner, setPartner] = useState<BillPartner>('standard')
   // Auto-capture
   const [autoCapture, setAutoCapture] = useState(false)
   const [autoStatus, setAutoStatus] = useState<'waiting'|'scanning'>('waiting')
@@ -323,20 +323,20 @@ export function CaptureWidget() {
     const vid = videoRef.current
     const srcW = vid.videoWidth, srcH = vid.videoHeight
     // Hurrier: crop to top 45% — name+TEL: always in that region, 2-3x faster OCR
-    const cropH = hurrierMode ? Math.round(srcH * 0.45) : srcH
+    const cropH = partner === 'hurrier' ? Math.round(srcH * 0.45) : srcH
     const c = document.createElement('canvas')
     c.width = srcW; c.height = cropH
     c.getContext('2d')!.drawImage(vid, 0, 0, srcW, srcH, 0, 0, srcW, cropH)
     setFullscreen(false); stopCam()
     runOCR(c.toDataURL('image/jpeg', 0.9))
-  }, [camActive, fullscreen, hurrierMode, stopCam, runOCR])
+  }, [camActive, fullscreen, partner, stopCam, runOCR])
 
   const handleFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return
-    try { await runOCR(await compressImage(file, hurrierMode ? 0.45 : 1.0)) }
+    try { await runOCR(await compressImage(file, partner === 'hurrier' ? 0.45 : 1.0)) }
     catch { toast('error', 'Failed to read image') }
     if (fileRef.current) fileRef.current.value = ''
-  }, [runOCR, hurrierMode])
+  }, [runOCR, partner])
 
   // Enter key in name/number inputs → save if valid
   useEffect(() => {
@@ -366,7 +366,7 @@ export function CaptureWidget() {
         ctx.filter = 'contrast(1.3) grayscale(1)'
         ctx.drawImage(vid, 0, 0, canvas.width, canvas.height)
         const img = canvas.toDataURL('image/jpeg', 0.82)
-        const result = await performOCR(img, 'fast')
+        const result = await performOCR(img, 'fast', partner)
         const { code, local } = parseOCRPhone(result.contactNumber || '')
         if (codeValid(code) && numValid(local)) {
           // Valid phone found → auto-capture full quality
@@ -378,7 +378,7 @@ export function CaptureWidget() {
       finally { autoLock.current = false; setAutoStatus('waiting') }
     }, 3000)
     return () => { clearInterval(interval); setAutoStatus('waiting'); autoLock.current = false }
-  }, [autoCapture, phase, camActive, capture])
+  }, [autoCapture, phase, camActive, capture, partner])
 
   const retake = () => {
     // If user was in fullscreen before capture, go straight back to fullscreen
@@ -415,10 +415,15 @@ export function CaptureWidget() {
       {/* Top-left toggles: Hurrier mode + Auto-capture */}
       {phase === 'idle' && (
         <div className="absolute top-4 left-4 z-10 flex flex-col gap-2">
-          <button onClick={() => setHurrierMode(h => !h)}
-            className={`flex items-center gap-1.5 px-3 py-2 rounded-full text-xs font-semibold transition-all ${hurrierMode ? 'bg-orange-500 text-white' : 'bg-black/60 text-gray-300'}`}>
-            🚚 {hurrierMode ? 'Hurrier ON' : 'Hurrier'}
-          </button>
+          {/* Partner quick-select in fullscreen */}
+          <div className="flex flex-col gap-1">
+            {(['snoonu','rafeeq','hurrier','direct','standard'] as BillPartner[]).map(p => (
+              <button key={p} onClick={() => setPartner(p)}
+                className={`px-2.5 py-1.5 rounded-full text-xs font-semibold transition-all text-left ${partner===p ? 'bg-white text-gray-900' : 'bg-black/50 text-gray-300'}`}>
+                {p==='snoonu'?'🟢':p==='rafeeq'?'🔵':p==='hurrier'?'🚚':p==='direct'?'🏪':'⭐'} {p.charAt(0).toUpperCase()+p.slice(1)}
+              </button>
+            ))}
+          </div>
           <button onClick={() => setAutoCapture(a => !a)}
             className={`flex items-center gap-1.5 px-3 py-2 rounded-full text-xs font-semibold transition-all ${autoCapture ? 'bg-green-500 text-white' : 'bg-black/60 text-gray-300'}`}>
             <span className={`w-2 h-2 rounded-full ${autoCapture ? 'bg-white animate-pulse' : 'bg-gray-500'}`} />
@@ -556,21 +561,28 @@ export function CaptureWidget() {
         ))}
       </div>
 
-      {/* OCR mode + Hurrier toggle */}
+      {/* Partner selector + OCR mode */}
       {mode !== 'manual' && mode !== 'batch' && (
-        <div className="flex items-center gap-2 mb-4 p-3 bg-gray-50 dark:bg-gray-700/40 rounded-xl border border-gray-200 dark:border-gray-700">
-          <Zap className="h-4 w-4 text-blue-500 shrink-0" />
-          <span className="text-sm text-gray-600 dark:text-gray-400 flex-1">OCR Mode</span>
-          {/* Hurrier mode toggle */}
-          <button onClick={() => setHurrierMode(h => !h)}
-            title="Hurrier bills: crops to top 45% for 3x faster scan"
-            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${hurrierMode ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400 ring-1 ring-orange-400' : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400'}`}>
-            🚚 {hurrierMode ? 'Hurrier ON' : 'Hurrier'}
-          </button>
-          <button onClick={() => setOcrMode(m => m === 'fast' ? 'ai' : 'fast')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold ${ocrMode === 'ai' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'}`}>
-            {ocrMode === 'ai' ? <><Brain className="h-3.5 w-3.5" />AI</> : <><Zap className="h-3.5 w-3.5" />Fast</>}
-          </button>
+        <div className="space-y-2 mb-4">
+          {/* Partner pills */}
+          <div className="flex gap-1.5 flex-wrap">
+            {([['standard','⭐','Standard','bg-gray-600'], ['snoonu','🟢','Snoonu','bg-green-600'], ['rafeeq','🔵','Rafeeq','bg-blue-600'], ['hurrier','🚚','Hurrier','bg-orange-500'], ['direct','🏪','Direct','bg-purple-600']] as [BillPartner,string,string,string][]).map(([p,emoji,label,color]) => (
+              <button key={p} onClick={() => setPartner(p)}
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all ${partner === p ? `${color} text-white shadow-sm` : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400'}`}>
+                {emoji} {label}
+              </button>
+            ))}
+          </div>
+          {/* OCR mode */}
+          <div className="flex items-center gap-2 p-2 bg-gray-50 dark:bg-gray-700/40 rounded-xl border border-gray-200 dark:border-gray-700">
+            <span className="text-xs text-gray-500 dark:text-gray-400 flex-1">
+              {partner === 'hurrier' ? '⚡ Hurrier: top 45% crop (3x faster)' : partner !== 'standard' ? `⚡ ${partner.charAt(0).toUpperCase()+partner.slice(1)}-optimised extraction` : '⭐ Standard: auto-detect all formats'}
+            </span>
+            <button onClick={() => setOcrMode(m => m === 'fast' ? 'ai' : 'fast')}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold ${ocrMode === 'ai' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'}`}>
+              {ocrMode === 'ai' ? <><Brain className="h-3 w-3" />AI</> : <><Zap className="h-3 w-3" />Fast</>}
+            </button>
+          </div>
         </div>
       )}
 
