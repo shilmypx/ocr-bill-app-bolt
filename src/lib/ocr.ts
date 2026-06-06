@@ -164,26 +164,41 @@ function rafeeqExtract(lines: string[]): { name: string; phone: string } {
 }
 
 // ── Hurrier ───────────────────────────────────────────────────────────────────
-// Name: fragments between #XXXX and TEL: — smart-join handles mid-word wrapping
-// Phone: TEL: + multi-line digit reassembly
+// KEY FIX: Tesseract often puts name AND TEL: on the SAME line, e.g.:
+//   "asma Obeidat TEL: +97433935721" or "#7086 asma Obeidat TEL: +97433935721"
+// Previous code used ^tel\s: (start-of-line anchor) which completely missed these.
+// New approach: find TEL: ANYWHERE in any line, then split on it.
 function hurrierExtract(lines: string[]): { name: string; phone: string } {
   let name = ''
   let phone = ''
 
-  for (let i = 1; i < lines.length; i++) {
-    if (!/^tel[\s:]/i.test(lines[i])) continue
+  for (let i = 0; i < lines.length; i++) {
+    // TEL: can appear ANYWHERE in the line — no ^ anchor
+    const telMatch = /tel\s*:/i.exec(lines[i])
+    if (!telMatch) continue
 
-    // ── Phone: reassemble split digits ────────────────────────────────────────
-    let combined = lines[i]
-    for (let j = i+1; j <= i+6 && j < lines.length; j++) {
-      if (/^[\d+]+$/.test(lines[j].trim())) combined += lines[j].trim()
+    const telPos = telMatch.index
+
+    // ── Phone: text from TEL: to end of line + continuation digit-only lines ──
+    let phoneSection = lines[i].slice(telPos)
+    let digitsSoFar = phoneSection.replace(/\D/g, '').length
+    for (let j = i+1; j <= i+6 && j < lines.length && digitsSoFar < 11; j++) {
+      const t = lines[j].trim()
+      if (/^[\d+]+$/.test(t)) { phoneSection += t; digitsSoFar = phoneSection.replace(/\D/g, '').length }
       else break
     }
-    for (const m of (combined.match(PHONE_TOKEN) || [])) {
+    for (const m of (phoneSection.match(PHONE_TOKEN) || [])) {
       const p = normalisePhone(m); if (p) { phone = p.full; break }
     }
 
-    // ── Name: scan backwards from TEL: ───────────────────────────────────────
+    // ── Name: fragments from BEFORE TEL: ─────────────────────────────────────
+    // Part A: same line as TEL: — text before TEL: (strip order number if present)
+    const beforeTel = lines[i].slice(0, telPos)
+      .replace(/^#?\d+\s*/, '')  // strip leading #XXXX
+      .replace(/\bpro\b/gi, '')   // strip "pro" badge
+      .trim()
+
+    // Part B: previous lines between order number and TEL: line
     let orderIdx = -1
     for (let j = i-1; j >= Math.max(0, i-15); j--) {
       if (/^#?\d{4,}/.test(lines[j])) { orderIdx = j; break }
@@ -195,26 +210,37 @@ function hurrierExtract(lines: string[]): { name: string; phone: string } {
       const l = lines[j].trim()
       if (!l) continue
       if (/^#?\d{4,}/.test(l)) {
-        const after = l.replace(/^#?\d+\s*/, '').trim()
-        if (after && !/^(hurrier|collection|prepaid|not paid|pickup|am\b|pm\b)/i.test(after)) frags.push(after)
+        // Extract name after order number on same line (e.g. "#7099 Reem Youssef")
+        const after = l.replace(/^#?\d+\s*/, '').replace(/\bpro\b/gi, '').trim()
+        if (after && !/^(hurrier|collection|prepaid|not paid|pickup|at\b|am\b|pm\b)/i.test(after)) frags.push(after)
         continue
       }
+      // Skip receipt structure, badges, address words, digits
       if (/^(hurrier|snoonu|rafeeq|collection|prepaid|not paid|pickup|at\b|am\b|pm\b|no cutlery|subtotal|total|delivery|order nr|pro\b)/i.test(l)) continue
-      if (/^(in\b|of\b|the\b|at\b|by\b|on\b|to\b|for\b|from\b|and\b|with\b|between\b|front\b|gate\b|your\b|is\b|no\b)/i.test(l)) continue
+      if (/^(in\b|of\b|the\b|at\b|by\b|on\b|to\b|for\b|from\b|and\b|with\b|between\b|front\b|gate\b|your\b|is\b|no\b|entrance\b|building\b)/i.test(l)) continue
       if (/^[\d:]+$/.test(l)) continue
       if (/[\u0600-\u06FF]/.test(l)) continue
       frags.push(l)
     }
+    // Add the name part from the TEL: line itself (comes last in reading order)
+    if (beforeTel && !/^(hurrier|collection|prepaid|not paid|pickup|pro\b)/i.test(beforeTel)) {
+      frags.push(beforeTel)
+    }
+
+    // Smart-join all name fragments
     if (frags.length > 0) {
       let n = frags[0]
       for (let k = 1; k < frags.length; k++) {
         n = hurrierNeedsConcat(n, frags[k]) ? n + frags[k] : n + ' ' + frags[k]
       }
       name = n.trim()
-      if (!/^[a-zA-Z]/.test(name) || /^(no cutlery|subtotal|total|delivery|pickup|collection|prepaid)/i.test(name)) name = ''
+      if (!/^[a-zA-Z]/.test(name) ||
+          /^(no cutlery|subtotal|total|delivery|pickup|collection|prepaid|entrance|building|maia|caffe|porche)/i.test(name)) {
+        name = ''
+      }
     }
 
-    // ── Forward scan fallback (OCR column reordering) ─────────────────────────
+    // Forward scan fallback — OCR put name AFTER TEL: due to column reordering
     if (!name) {
       for (let j = i+1; j <= Math.min(i+3, lines.length-1); j++) {
         const l = lines[j].trim()
