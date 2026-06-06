@@ -322,18 +322,29 @@ export function CaptureWidget() {
     wasFull.current = fullscreen
     const vid = videoRef.current
     const srcW = vid.videoWidth, srcH = vid.videoHeight
-    // Hurrier: crop to top 45% — name+TEL: always in that region, 2-3x faster OCR
-    const cropH = partner === 'hurrier' ? Math.round(srcH * 0.45) : srcH
     const c = document.createElement('canvas')
-    c.width = srcW; c.height = cropH
-    c.getContext('2d')!.drawImage(vid, 0, 0, srcW, srcH, 0, 0, srcW, cropH)
+    const ctx = c.getContext('2d')!
+    if (partner === 'hurrier') {
+      // Hurrier two-column layout: left 40% = big order number, right 60% = name+TEL
+      // Crop to RIGHT 60% × TOP 50% — gives Tesseract a clean single-column view
+      // Without the large #XXXX order number that confuses Tesseract's layout detection
+      const cropX = Math.round(srcW * 0.40)
+      const cropW = srcW - cropX
+      const cropH = Math.round(srcH * 0.50)
+      c.width = cropW; c.height = cropH
+      ctx.filter = 'contrast(1.5) grayscale(1) brightness(1.1)'
+      ctx.drawImage(vid, cropX, 0, cropW, cropH, 0, 0, cropW, cropH)
+    } else {
+      c.width = srcW; c.height = srcH
+      ctx.drawImage(vid, 0, 0)
+    }
     setFullscreen(false); stopCam()
     runOCR(c.toDataURL('image/jpeg', 0.9))
   }, [camActive, fullscreen, partner, stopCam, runOCR])
 
   const handleFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return
-    try { await runOCR(await compressImage(file, partner === 'hurrier' ? 0.45 : 1.0)) }
+    try { await runOCR(await compressImage(file, partner === 'hurrier' ? 0.50 : 1.0)) }
     catch { toast('error', 'Failed to read image') }
     if (fileRef.current) fileRef.current.value = ''
   }, [runOCR, partner])
@@ -576,7 +587,7 @@ export function CaptureWidget() {
           {/* OCR mode */}
           <div className="flex items-center gap-2 p-2 bg-gray-50 dark:bg-gray-700/40 rounded-xl border border-gray-200 dark:border-gray-700">
             <span className="text-xs text-gray-500 dark:text-gray-400 flex-1">
-              {partner === 'hurrier' ? '⚡ Hurrier: top 45% crop (3x faster)' : partner !== 'standard' ? `⚡ ${partner.charAt(0).toUpperCase()+partner.slice(1)}-optimised extraction` : '⭐ Standard: auto-detect all formats'}
+              {partner === 'hurrier' ? '🚚 Hurrier: right-column crop (name+TEL only)' : partner !== 'standard' ? `⚡ ${partner.charAt(0).toUpperCase()+partner.slice(1)}-optimised extraction` : '⭐ Standard: auto-detect all formats'}
             </span>
             <button onClick={() => setOcrMode(m => m === 'fast' ? 'ai' : 'fast')}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold ${ocrMode === 'ai' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'}`}>
@@ -638,7 +649,7 @@ export function CaptureWidget() {
               {ocrMode === 'ai' ? <Brain className="h-7 w-7 text-blue-600" /> : <Zap className="h-7 w-7 text-blue-600" />}
             </div>
           </div>
-          <div className="text-center"><p className="font-semibold text-gray-900 dark:text-white text-lg">Reading Bill...</p><p className="text-sm text-gray-500">{ocrMode === 'ai' ? 'AI enhanced' : 'Fast scan'}</p></div>
+          <div className="text-center"><p className="font-semibold text-gray-900 dark:text-white text-lg">Reading Bill...</p><p className="text-sm text-gray-500">{partner === 'hurrier' ? 'AI Vision — Hurrier' : ocrMode === 'ai' ? 'AI enhanced' : 'Fast scan'}</p></div>
         </CardContent></Card>
       )}
 

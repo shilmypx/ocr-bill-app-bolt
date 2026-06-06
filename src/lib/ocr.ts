@@ -433,12 +433,54 @@ export function parseOCRPhone(raw: string): { code: string; local: string; full:
   return p || { code: '+974', local: '', full: '' }
 }
 
+// ── Hurrier Vision API: uses Claude Vision when partner=hurrier ───────────────
+// Tesseract cannot reliably parse Hurrier's two-column layout.
+// This calls /api/hurrier-vision which uses Claude Vision API for semantic extraction.
+async function hurrierVisionExtract(imageData: string): Promise<{ name: string; phone: string }> {
+  try {
+    const res = await fetch('/api/hurrier-vision', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ imageData }),
+    })
+    if (!res.ok) throw new Error(`Vision API ${res.status}`)
+    const data = await res.json()
+    return { name: data.customerName || '', phone: data.contactNumber || '' }
+  } catch (e) {
+    console.warn('Vision API failed, falling back to Tesseract:', e)
+    return { name: '', phone: '' }
+  }
+}
+
 // ── Main OCR entry point ──────────────────────────────────────────────────────
 export async function performOCR(
   imageData: string,
   _mode: 'fast' | 'ai' = 'fast',
   partner: BillPartner = 'standard'
 ): Promise<OCRResult> {
+  // Hurrier: always use Claude Vision API — Tesseract cannot handle the two-column layout
+  if (partner === 'hurrier') {
+    const vision = await hurrierVisionExtract(imageData)
+    // Also run Tesseract to get order number, date, etc. (but use Vision for name/phone)
+    if (!workerReady || !worker) await initTesseractWorker()
+    let raw = ''
+    try {
+      const { data } = await worker.recognize(imageData)
+      raw = data?.text || ''
+    } catch { /* use empty raw */ }
+    return {
+      customerName:    vision.name,
+      contactNumber:   vision.phone,
+      orderNumber:     findOrderNumber(raw),
+      billDate:        findDate(raw),
+      restaurant:      findRestaurant(raw),
+      address:         '',
+      deliveryPartner: 'hurrier',
+      rawText:         raw,
+      confidence:      vision.name || vision.phone ? 95 : 0,
+    }
+  }
+
   if (!workerReady || !worker) await initTesseractWorker()
   try {
     const { data } = await worker.recognize(imageData)
@@ -452,7 +494,6 @@ export async function performOCR(
     switch (partner) {
       case 'snoonu':  extracted = snoonuExtract(lines, billHasArabic); break
       case 'rafeeq':  extracted = rafeeqExtract(lines); break
-      case 'hurrier': extracted = hurrierExtract(lines); break
       case 'direct':  extracted = directExtract(lines); break
       default:        extracted = standardExtract(lines, raw); break
     }
