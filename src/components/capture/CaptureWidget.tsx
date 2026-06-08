@@ -103,16 +103,17 @@ function NameField({ value, onChange, id }: { value: string; onChange: (v: strin
 
 // Editable phone input with per-field red highlighting
 // Code box: red if not +974 | Number box: red if not exactly 8 digits
-function PhoneInput({ code, num, onCode, onNum, autoFocus, numId }: {
+function PhoneInput({ code, num, onCode, onNum, autoFocus, numId, relaxed }: {
   code: string; num: string
   onCode: (v: string) => void; onNum: (v: string) => void
   autoFocus?: boolean; numId?: string
+  relaxed?: boolean  // manual entry: no red on code, allow longer num
 }) {
   const digits = num.replace(/\D/g, '')
   const codeOk = codeValid(code)
   const nOk = numValid(num)
   const full = join(code, num)
-  const showCodeErr = code.trim() !== '' && !codeOk
+  const showCodeErr = !relaxed && code.trim() !== '' && !codeOk
   const showNumErr = digits.length > 0 && !nOk
 
   return (
@@ -140,7 +141,7 @@ function PhoneInput({ code, num, onCode, onNum, autoFocus, numId }: {
           value={num}
           autoFocus={autoFocus}
           autoComplete="off"
-          onChange={e => onNum(e.target.value.replace(/\D/g, '').slice(0, 10))}
+          onChange={e => onNum(e.target.value.replace(/\D/g, '').slice(0, relaxed ? 12 : 10))}
           placeholder="41105663"
           className={`flex-1 px-3 py-3 text-base font-mono focus:outline-none transition-colors
             ${showNumErr
@@ -700,7 +701,23 @@ export function CaptureWidget() {
           <div className="text-center"><p className="font-bold text-gray-900 dark:text-white">OCR Failed</p><p className="text-sm text-gray-500">{errMsg}</p></div>
           <div className="w-full space-y-3">
             <NameField value={form.name} onChange={v => setForm(f => ({ ...f, name: v }))} />
-            <PhoneInput code={form.code} num={form.num} onCode={v => setForm(f => ({ ...f, code: v }))} onNum={v => setForm(f => ({ ...f, num: v }))} autoFocus />
+            <PhoneInput
+              relaxed
+              code={form.code}
+              num={form.num}
+              onCode={v => setForm(f => ({ ...f, code: v }))}
+              onNum={v => {
+                // Auto-split full international number (e.g. "97335555141" → code=+973 num=35555141)
+                const digits = v.replace(/\D/g, '')
+                if (digits.length >= 11 && digits.startsWith('9')) {
+                  const codeDigits = digits.slice(0, 3)  // e.g. "973"
+                  const local = digits.slice(3)           // remaining 8 digits
+                  if (local.length === 8) { setForm(f => ({ ...f, code: '+' + codeDigits, num: local })); return }
+                }
+                setForm(f => ({ ...f, num: v }))
+              }}
+              autoFocus
+            />
           </div>
           <div className="flex gap-2 w-full">
             <Button variant="outline" onClick={retake} className="flex-1"><RotateCcw className="h-4 w-4" />Retake</Button>
@@ -714,7 +731,23 @@ export function CaptureWidget() {
         <Card><CardContent>
           <div className="flex items-center gap-2 mb-5"><Edit3 className="h-5 w-5 text-blue-500" /><span className="font-semibold text-gray-900 dark:text-white">Quick Entry</span></div>
           <div className="space-y-4">
-            <PhoneInput code={form.code} num={form.num} onCode={v => setForm(f => ({ ...f, code: v }))} onNum={v => setForm(f => ({ ...f, num: v }))} autoFocus />
+            <PhoneInput
+              relaxed
+              code={form.code}
+              num={form.num}
+              onCode={v => setForm(f => ({ ...f, code: v }))}
+              onNum={v => {
+                // Auto-split full international number (e.g. "97335555141" → code=+973 num=35555141)
+                const digits = v.replace(/\D/g, '')
+                if (digits.length >= 11 && digits.startsWith('9')) {
+                  const codeDigits = digits.slice(0, 3)  // e.g. "973"
+                  const local = digits.slice(3)           // remaining 8 digits
+                  if (local.length === 8) { setForm(f => ({ ...f, code: '+' + codeDigits, num: local })); return }
+                }
+                setForm(f => ({ ...f, num: v }))
+              }}
+              autoFocus
+            />
             <div>
               <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Customer Name</label>
               <input type="text" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
@@ -724,8 +757,8 @@ export function CaptureWidget() {
           </div>
           {/* Manual entry: show validation hint but never block saving */}
           {form.num && !canSave && (
-            <p className="text-xs text-amber-600 dark:text-amber-400 mt-3 text-center flex items-center justify-center gap-1">
-              ⚠️ Number format: +974 · 8 digits recommended
+            <p className="text-xs text-gray-400 dark:text-gray-500 mt-3 text-center">
+              ℹ️ Will be saved as: {form.code}&nbsp;{form.num}
             </p>
           )}
           <Button onClick={() => save(form)} loading={saving} disabled={!form.num.trim() || saving} className="w-full mt-3">Save Record</Button>

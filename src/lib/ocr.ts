@@ -160,35 +160,53 @@ function snoonuExtract(lines: string[], billHasArabic: boolean): { name: string;
 }
 
 // ── Rafeeq ────────────────────────────────────────────────────────────────────
-// Name: "Customer: [NAME]" or "Customer (العميل): [NAME]"
-// Phone: "Mobile number: (+974) XXXXXXXX" or "Phone Number: (+974) XXXXXXXX"
+// Formats supported:
+//   New:  "Customer : amna Alotaibi"   / "Phone Number : (+974) 66556649"
+//   New:  "Customer :"                  / "amna Alotaibi"  (name on next line)
+//   Old:  "Customer (العميل): NAME"    / "Mobile number (رقم الهاتف) :"
+//         "(+974) XXXXXXXX"            (phone on next line after Arabic label)
 function rafeeqExtract(lines: string[]): { name: string; phone: string } {
   let name = ''
   let phone = ''
 
-  // Name
-  for (const line of lines) {
-    if (!/^customer\b/i.test(line)) continue
-    const after = line.replace(/^customer[^a-zA-Z\u0600-\u06FF]*/i, '').trim()
-    if (!after) continue
-    if (/[\u0600-\u06FF]/.test(after) || /[^\x20-\x7E]/.test(after)) break
-    if (isLatinName(after)) { name = after; break }
+  // ── Name ─────────────────────────────────────────────────────────────────────
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^customer\b/i.test(lines[i])) continue
+    // Strip "Customer" + any separator chars (space, colon, parens, Arabic label text)
+    const after = lines[i].replace(/^customer[^a-zA-Z\u0600-\u06FF]*/i, '').trim()
+    if (after) {
+      if (/[\u0600-\u06FF]/.test(after) || /[^\x20-\x7E]/.test(after)) { name = ''; break } // Arabic name
+      if (isLatinName(after)) { name = after; break }
+    } else {
+      // afterColon empty → name may be on next line (e.g. "Customer :\namna Alotaibi")
+      if (i + 1 < lines.length) {
+        const nextLine = lines[i + 1].trim()
+        if (nextLine && !/[\u0600-\u06FF]/.test(nextLine) && isLatinName(nextLine)) {
+          name = nextLine; break
+        }
+      }
+    }
   }
 
-  // Phone: Mobile number: or Phone Number:
+  // ── Phone ─────────────────────────────────────────────────────────────────────
+  // Labels: "Phone Number :", "Mobile number :", "Phone Number : (+974)...", etc.
   for (let i = 0; i < lines.length; i++) {
     if (!/mobile\s*number|phone\s*number/i.test(lines[i])) continue
     const candidates = [...(lines[i].match(PHONE_TOKEN) || [])]
-    for (let j = i+1; j <= i+2 && j < lines.length; j++) {
+    // Look up to 4 lines ahead — handles Arabic label lines between phone label and number
+    for (let j = i + 1; j <= i + 4 && j < lines.length; j++) {
+      if (/^[\u0600-\u06FF]/.test(lines[j])) continue // skip Arabic label lines
+      if (/^(vendor|customer|item|qty|price|total|subtotal|delivery|payment)/i.test(lines[j])) break
       candidates.push(...(lines[j].match(PHONE_TOKEN) || []))
     }
     for (const m of candidates) { const p = normalisePhone(m); if (p) { phone = p.full; break } }
     if (phone) break
   }
 
-  // Fallback: (+974) XXXXXXXX anywhere
+  // Fallback: (+974) XXXXXXXX or +974XXXXXXXX anywhere in text
   if (!phone) {
-    const m = lines.join(' ').match(/\(\+974\)\s*\d{6,10}/)
+    const joined = lines.join(' ')
+    const m = joined.match(/\(\+974\)\s*\d{6,10}|\+974\d{8,9}/)
     if (m) { const p = normalisePhone(m[0]); if (p) phone = p.full }
   }
 
