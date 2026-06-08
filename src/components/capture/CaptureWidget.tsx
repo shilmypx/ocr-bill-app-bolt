@@ -722,8 +722,13 @@ export function CaptureWidget() {
                 className="w-full px-3 py-2.5 rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>
           </div>
-          <Button onClick={() => save(form)} loading={saving} disabled={!canSave} className="w-full mt-5">Save Record</Button>
-          {!canSave && form.num && <p className="text-xs text-center text-red-500 mt-2">Enter at least 8 digits after country code</p>}
+          {/* Manual entry: show validation hint but never block saving */}
+          {form.num && !canSave && (
+            <p className="text-xs text-amber-600 dark:text-amber-400 mt-3 text-center flex items-center justify-center gap-1">
+              ⚠️ Number format: +974 · 8 digits recommended
+            </p>
+          )}
+          <Button onClick={() => save(form)} loading={saving} disabled={!form.num.trim() || saving} className="w-full mt-3">Save Record</Button>
         </CardContent></Card>
       )}
       {/* BATCH MODE */}
