@@ -160,11 +160,26 @@ function snoonuExtract(lines: string[], billHasArabic: boolean): { name: string;
 }
 
 // ── Rafeeq ────────────────────────────────────────────────────────────────────
-// Formats supported:
-//   New:  "Customer : amna Alotaibi"   / "Phone Number : (+974) 66556649"
-//   New:  "Customer :"                  / "amna Alotaibi"  (name on next line)
-//   Old:  "Customer (العميل): NAME"    / "Mobile number (رقم الهاتف) :"
-//         "(+974) XXXXXXXX"            (phone on next line after Arabic label)
+// All confirmed Rafeeq bill formats:
+//
+// FORMAT A (standard new Rafeeq):
+//   اسم الزبون
+//   Customer : NAME
+//   رقم الهاتف
+//   Phone Number : (+974) XXXXXXXX
+//
+// FORMAT B (name on next line when colon is empty):
+//   Customer :
+//   NAME
+//   Phone Number : (+974) XXXXXXXX
+//
+// FORMAT C (old Rafeeq bilingual):
+//   Customer (العميل): NAME
+//   Mobile number (رقم الهاتف) :
+//   (+974) XXXXXXXX
+//
+// Arabic names (all formats) → cleared (Tesseract English cannot OCR Arabic)
+// English names (all formats) → captured
 function rafeeqExtract(lines: string[]): { name: string; phone: string } {
   let name = ''
   let phone = ''
@@ -172,13 +187,15 @@ function rafeeqExtract(lines: string[]): { name: string; phone: string } {
   // ── Name ─────────────────────────────────────────────────────────────────────
   for (let i = 0; i < lines.length; i++) {
     if (!/^customer\b/i.test(lines[i])) continue
-    // Strip "Customer" + any separator chars (space, colon, parens, Arabic label text)
+    // Strip "Customer" + any non-letter separators (handles " : ", " (العميل): " etc.)
+    // Stop stripping at first Latin or Arabic letter to avoid consuming the name
     const after = lines[i].replace(/^customer[^a-zA-Z\u0600-\u06FF]*/i, '').trim()
     if (after) {
-      if (/[\u0600-\u06FF]/.test(after) || /[^\x20-\x7E]/.test(after)) { name = ''; break } // Arabic name
+      // Arabic name → clear (cannot OCR reliably with English Tesseract)
+      if (/[\u0600-\u06FF]/.test(after) || /[^\x20-\x7E]/.test(after)) { name = ''; break }
       if (isLatinName(after)) { name = after; break }
     } else {
-      // afterColon empty → name may be on next line (e.g. "Customer :\namna Alotaibi")
+      // Empty afterColon → name is on the NEXT line (Format B)
       if (i + 1 < lines.length) {
         const nextLine = lines[i + 1].trim()
         if (nextLine && !/[\u0600-\u06FF]/.test(nextLine) && isLatinName(nextLine)) {
@@ -189,25 +206,40 @@ function rafeeqExtract(lines: string[]): { name: string; phone: string } {
   }
 
   // ── Phone ─────────────────────────────────────────────────────────────────────
-  // Labels: "Phone Number :", "Mobile number :", "Phone Number : (+974)...", etc.
+  // Phone label triggers: English labels AND Arabic label رقم الهاتف / هاتف
+  // The Arabic labels appear in Format C before the English "Mobile number" line.
+  const PHONE_LABEL_RE = /mobile\s*number|phone\s*number|رقم\s*الهاتف|هاتف/i
+
   for (let i = 0; i < lines.length; i++) {
-    if (!/mobile\s*number|phone\s*number/i.test(lines[i])) continue
-    const candidates = [...(lines[i].match(PHONE_TOKEN) || [])]
-    // Look up to 4 lines ahead — handles Arabic label lines between phone label and number
+    if (!PHONE_LABEL_RE.test(lines[i])) continue
+    // Collect phone candidates from this line AND next 4 lines
+    const candidates: string[] = [...(lines[i].match(PHONE_TOKEN) || [])]
     for (let j = i + 1; j <= i + 4 && j < lines.length; j++) {
-      if (/^[\u0600-\u06FF]/.test(lines[j])) continue // skip Arabic label lines
-      if (/^(vendor|customer|item|qty|price|total|subtotal|delivery|payment)/i.test(lines[j])) break
-      candidates.push(...(lines[j].match(PHONE_TOKEN) || []))
+      const l = lines[j]
+      // Hard stop: next major section started
+      if (/^(vendor|customer|item|qty|price|total|subtotal|delivery|payment|address)/i.test(l)) break
+      // Pure Arabic label lines don't contain phone digits — skip but keep looking
+      if (/^[\u0600-\u06FF]{2,}$/.test(l.trim())) continue
+      candidates.push(...(l.match(PHONE_TOKEN) || []))
     }
     for (const m of candidates) { const p = normalisePhone(m); if (p) { phone = p.full; break } }
     if (phone) break
   }
 
-  // Fallback: (+974) XXXXXXXX or +974XXXXXXXX anywhere in text
+  // Fallback 1: find (+974) XXXXXXXX or +974XXXXXXXX anywhere in the text
   if (!phone) {
     const joined = lines.join(' ')
-    const m = joined.match(/\(\+974\)\s*\d{6,10}|\+974\d{8,9}/)
+    const m = joined.match(/\(\+\s*974\)\s*\d{6,10}|\+974\d{8,9}|\+97[0-9]\d{8}/)
     if (m) { const p = normalisePhone(m[0]); if (p) phone = p.full }
+  }
+
+  // Fallback 2: find any Qatar-pattern 8-digit number anywhere (last resort)
+  // Qatar mobiles start with 3,4,5,6,7 — match standalone 8-digit groups
+  if (!phone) {
+    const joined = lines.join('\n')
+    // Look for 8 digits after a (+974) or after the phone label region
+    const m = joined.match(/\b([3-7]\d{7})\b/)
+    if (m) { const p = normalisePhone(m[1]); if (p) phone = p.full }
   }
 
   return { name, phone }
