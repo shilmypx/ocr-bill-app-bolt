@@ -345,7 +345,7 @@ export function CaptureWidget() {
 
   const handleFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return
-    try { await runOCR(await compressImage(file, partner === 'hurrier' ? 0.60 : 1.0, partner === 'hurrier' ? 0.40 : 0)) }
+    try { await runOCR(await compressImage(file, partner === 'hurrier' ? 0.80 : 1.0, partner === 'hurrier' ? 0.40 : 0)) }
     catch { toast('error', 'Failed to read image') }
     if (fileRef.current) fileRef.current.value = ''
   }, [runOCR, partner])

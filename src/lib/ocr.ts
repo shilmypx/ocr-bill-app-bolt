@@ -246,31 +246,48 @@ function rafeeqExtract(lines: string[]): { name: string; phone: string } {
 }
 
 // ── Hurrier ───────────────────────────────────────────────────────────────────
-// KEY FIX: Tesseract often puts name AND TEL: on the SAME line, e.g.:
-//   "asma Obeidat TEL: +97433935721" or "#7086 asma Obeidat TEL: +97433935721"
-// Previous code used ^tel\s: (start-of-line anchor) which completely missed these.
-// New approach: find TEL: ANYWHERE in any line, then split on it.
+// All confirmed bill layouts — single line, multi-line split, name+TEL same line:
+//   #7086: "asma Obeidat" / "pro" / "TEL: +97433935721"
+//   #6070: "ha" / "TEL: +" / "97466" / "98622" / "7"   ← split across 4 lines
+//   #6113: "Reem"/"MKH"/"Al"/"Thani" / "TEL: +" / "97450"/"75355"/"5"
+//   #696:  "Nour A TEL: +97477994494"                   ← name+TEL same line
+//   #6775: "pro TEL: +97430087745"                      ← no name, pro+TEL same line
+//
+// PHONE FIX: Previous code broke on the FIRST non-digit line between split fragments.
+// Tesseract inserts garbage/blank lines between "97466" "98622" "7" so the loop
+// broke after the first fragment, leaving an incomplete number.
+// New approach: ACCUMULATE DIGITS from all nearby lines (skip non-digit lines
+// rather than breaking), stopping only at known section boundaries.
 function hurrierExtract(lines: string[]): { name: string; phone: string } {
   let name = ''
   let phone = ''
 
   for (let i = 0; i < lines.length; i++) {
-    // TEL: can appear ANYWHERE in the line — no ^ anchor
-    const telMatch = /tel\s*:/i.exec(lines[i])
+    // TEL: can appear ANYWHERE in the line — no ^ anchor required
+    const telMatch = /tel\s*[:\|;]/i.exec(lines[i])
     if (!telMatch) continue
 
     const telPos = telMatch.index
 
-    // ── Phone: text from TEL: to end of line + continuation digit-only lines ──
-    let phoneSection = lines[i].slice(telPos)
-    let digitsSoFar = phoneSection.replace(/\D/g, '').length
-    for (let j = i+1; j <= i+6 && j < lines.length && digitsSoFar < 11; j++) {
-      const t = lines[j].trim()
-      if (/^[\d+]+$/.test(t)) { phoneSection += t; digitsSoFar = phoneSection.replace(/\D/g, '').length }
-      else break
+    // ── Phone: accumulate all digits from TEL: onwards ────────────────────────
+    // Skip non-digit lines rather than breaking — Tesseract may insert garbage
+    // lines between digit fragments (e.g. "97466" / "[noise]" / "98622" / "7")
+    let rawDigits = lines[i].slice(telPos).replace(/\D/g, '')
+    for (let j = i + 1; j <= Math.min(i + 8, lines.length - 1); j++) {
+      const l = lines[j].trim()
+      // Hard stop at known section boundaries
+      if (/^(no cutlery|subtotal|total|delivery fee|qr\b|\d\s+[A-Z]|vendor|customer|pickup|hurrier|may\b|order nr|thanks)/i.test(l)) break
+      if (/^[\u0600-\u06FF]/.test(l)) break  // Arabic section separator (بدون أدوات المائدة etc.)
+      // Include line if it's primarily digits (≥50% digit chars) — phone fragment
+      const ld = l.replace(/\D/g, '')
+      if (ld.length > 0 && ld.length / Math.max(l.length, 1) >= 0.5) {
+        rawDigits += ld
+        if (rawDigits.length >= 11) break  // full Qatar number assembled
+      }
     }
-    for (const m of (phoneSection.match(PHONE_TOKEN) || [])) {
-      const p = normalisePhone(m); if (p) { phone = p.full; break }
+    if (rawDigits.length >= 8) {
+      const p = normalisePhone(rawDigits.startsWith('974') ? '+' + rawDigits : rawDigits)
+      if (p) phone = p.full
     }
 
     // ── Name: fragments from BEFORE TEL: ─────────────────────────────────────
@@ -523,12 +540,10 @@ export async function performOCR(
 ): Promise<OCRResult> {
   if (!workerReady || !worker) await initTesseractWorker()
 
-  // Hurrier: crop to right 60% × top 60% BEFORE Tesseract to remove the large
-  // left-column order number (#7086) that confuses Tesseract's column detection.
-  // This is free — no API cost. cropRightColumn returns a focused single-column image.
-  const ocrImage = (partner === 'hurrier')
-    ? await cropRightColumn(imageData, 0.40, 0.60)
-    : imageData
+  // Hurrier: image is pre-cropped by camera capture OR file upload before arriving here.
+  // For auto-scan, the caller pre-crops before calling performOCR.
+  // DO NOT crop again here — double-cropping reduces image to 36%x36% of original.
+  const ocrImage = imageData
 
   try {
     const { data } = await worker.recognize(ocrImage)
