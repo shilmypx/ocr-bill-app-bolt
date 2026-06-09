@@ -372,7 +372,14 @@ export function CaptureWidget() {
 
       // Ctrl+R → retake (prevent browser refresh)
       if (e.key === 'r' && (e.ctrlKey || e.metaKey)) {
-        e.preventDefault(); retake(); return
+        e.preventDefault()
+        // inline retake: reset to idle, restart camera
+        setPhase('idle')
+        setOcr(null)
+        setForm({ code: '+974', num: '', name: '' })
+        setIsDup(false)
+        if (wasFull.current) setFullscreen(true)
+        return
       }
 
       // Backspace when Save button is focused → clear name field
@@ -390,7 +397,8 @@ export function CaptureWidget() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [phase, canSave, form, ocr, save, retake])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, canSave, form, ocr, save])  // retake is stable (recreated each render but same logic)
 
   // Auto-capture: scan live camera frame every ~3s; auto-trigger when phone detected
   useEffect(() => {
