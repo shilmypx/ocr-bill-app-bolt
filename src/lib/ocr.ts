@@ -12,6 +12,9 @@ export async function initTesseractWorker() {
   try {
     const { createWorker } = await import('tesseract.js')
     worker = await createWorker('eng', 1, { logger: () => {}, errorHandler: () => {} })
+    // PSM 6: Assume single uniform block of text — faster for receipts, avoids
+    // column-detection overhead that confuses multi-font thermal print layouts
+    await worker.setParameters({ tessedit_pageseg_mode: '6' })
     workerReady = true
   } catch (e) { console.warn('Tesseract init failed:', e) }
 }
@@ -205,41 +208,43 @@ function rafeeqExtract(lines: string[]): { name: string; phone: string } {
     }
   }
 
-  // ── Phone ─────────────────────────────────────────────────────────────────────
-  // Phone label triggers: English labels AND Arabic label رقم الهاتف / هاتف
-  // The Arabic labels appear in Format C before the English "Mobile number" line.
-  const PHONE_LABEL_RE = /mobile\s*number|phone\s*number|رقم\s*الهاتف|هاتف/i
-
+  // ── Phone — multi-level detection ────────────────────────────────────────────
+  // Level 1: find phone/mobile label → accumulate digits from same line + next 5 lines
+  // (uses digit accumulation instead of PHONE_TOKEN regex to handle OCR spacing artifacts)
+  const RAFEEQ_PHONE_LABELS = /mobile\s*number|phone\s*number|رقم\s*الهاتف|هاتف/i
   for (let i = 0; i < lines.length; i++) {
-    if (!PHONE_LABEL_RE.test(lines[i])) continue
-    // Collect phone candidates from this line AND next 4 lines
-    const candidates: string[] = [...(lines[i].match(PHONE_TOKEN) || [])]
-    for (let j = i + 1; j <= i + 4 && j < lines.length; j++) {
+    if (!RAFEEQ_PHONE_LABELS.test(lines[i])) continue
+    // Accumulate ALL digits from this line and next 5 lines
+    let rawDigits = lines[i].replace(/\D/g, '')
+    for (let j = i + 1; j <= i + 5 && j < lines.length; j++) {
       const l = lines[j]
-      // Hard stop: next major section started
-      if (/^(vendor|customer|item|qty|price|total|subtotal|delivery|payment|address)/i.test(l)) break
-      // Pure Arabic label lines don't contain phone digits — skip but keep looking
-      if (/^[\u0600-\u06FF]{2,}$/.test(l.trim())) continue
-      candidates.push(...(l.match(PHONE_TOKEN) || []))
+      if (/^(vendor|customer name|item|total|subtotal|delivery|payment type|address|order)/i.test(l)) break
+      const ld = l.replace(/\D/g, '')
+      if (ld.length > 0) rawDigits += ld
+      if (rawDigits.length >= 11) break
     }
-    for (const m of candidates) { const p = normalisePhone(m); if (p) { phone = p.full; break } }
-    if (phone) break
+    if (rawDigits.length >= 8) {
+      const p = normalisePhone(rawDigits.startsWith('974') ? '+' + rawDigits : rawDigits)
+      if (p) { phone = p.full; break }
+    }
   }
 
-  // Fallback 1: find (+974) XXXXXXXX or +974XXXXXXXX anywhere in the text
+  // Level 2: scan full text for (+974) or +974 pattern
   if (!phone) {
-    const joined = lines.join(' ')
-    const m = joined.match(/\(\+\s*974\)\s*\d{6,10}|\+974\d{8,9}|\+97[0-9]\d{8}/)
-    if (m) { const p = normalisePhone(m[0]); if (p) phone = p.full }
+    const full = lines.join(' ')
+    // Strip all whitespace from the full text to handle "( +974 )" style OCR
+    const compact = full.replace(/\s+/g, '')
+    const m2 = compact.match(/\(\+?974\)(\d{8,9})|\+974(\d{8,9})/)
+    if (m2) {
+      const local = m2[1] || m2[2]
+      if (local) { const p = normalisePhone('+974' + local); if (p) phone = p.full }
+    }
   }
 
-  // Fallback 2: find any Qatar-pattern 8-digit number anywhere (last resort)
-  // Qatar mobiles start with 3,4,5,6,7 — match standalone 8-digit groups
+  // Level 3: find any 8-digit Qatar mobile number anywhere (starts with 3-7)
   if (!phone) {
-    const joined = lines.join('\n')
-    // Look for 8 digits after a (+974) or after the phone label region
-    const m = joined.match(/\b([3-7]\d{7})\b/)
-    if (m) { const p = normalisePhone(m[1]); if (p) phone = p.full }
+    const m3 = lines.join(' ').match(/\b([3-7]\d{7})\b/)
+    if (m3) { const p = normalisePhone(m3[1]); if (p) phone = p.full }
   }
 
   return { name, phone }
@@ -540,10 +545,13 @@ export async function performOCR(
 ): Promise<OCRResult> {
   if (!workerReady || !worker) await initTesseractWorker()
 
-  // Hurrier: image is pre-cropped by camera capture OR file upload before arriving here.
-  // For auto-scan, the caller pre-crops before calling performOCR.
-  // DO NOT crop again here — double-cropping reduces image to 36%x36% of original.
-  const ocrImage = imageData
+  // Crop strategy per partner (applied ONCE here — camera/file do NOT pre-crop for Rafeeq):
+  //   Hurrier: pre-cropped by camera/file handler — pass as-is (avoid double-crop)
+  //   Rafeeq:  crop to top 55% full width — removes items list, focuses on name+phone
+  //   Others:  no crop
+  const ocrImage = (partner === 'rafeeq')
+    ? await cropRightColumn(imageData, 0, 0.55)
+    : imageData
 
   try {
     const { data } = await worker.recognize(ocrImage)
