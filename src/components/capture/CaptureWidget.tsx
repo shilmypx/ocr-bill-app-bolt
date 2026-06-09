@@ -377,7 +377,7 @@ export function CaptureWidget() {
         const ctx = canvas.getContext('2d')!
         ctx.filter = 'contrast(1.3) grayscale(1)'
         ctx.drawImage(vid, 0, 0, canvas.width, canvas.height)
-        const img = canvas.toDataURL('image/jpeg', 0.82)
+        const img = canvas.toDataURL('image/jpeg', 0.80)
         const result = await performOCR(img, 'fast', partner)
         const { code, local } = parseOCRPhone(result.contactNumber || '')
         if (codeValid(code) && numValid(local)) {
