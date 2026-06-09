@@ -350,6 +350,16 @@ export function CaptureWidget() {
     if (fileRef.current) fileRef.current.value = ''
   }, [runOCR, partner])
 
+  // Enter key in camera idle phase → capture the bill
+  useEffect(() => {
+    if (mode !== 'camera' || phase !== 'idle' || !camActive) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Enter') { e.preventDefault(); capture() }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [mode, phase, camActive, capture])
+
   // Enter key in name/number inputs → save if valid
   useEffect(() => {
     if (phase !== 'review') return
