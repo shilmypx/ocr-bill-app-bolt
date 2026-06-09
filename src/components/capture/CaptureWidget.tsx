@@ -678,6 +678,12 @@ export function CaptureWidget() {
             <Button variant="outline" onClick={retake} className="flex-1" disabled={saving}><RotateCcw className="h-4 w-4" />Retake</Button>
             <Button id="rv-save" ref={saveRefNormal} onClick={() => save(form, ocr || undefined)} loading={saving} disabled={!canSave} className="flex-1">Save Record</Button>
           </div>
+          {ocr?.rawText && (
+            <details className="mt-3">
+              <summary className="text-xs text-gray-400 cursor-pointer">🔍 Raw OCR text (debug)</summary>
+              <pre className="text-xs text-gray-500 mt-1 p-2 bg-gray-50 dark:bg-gray-800 rounded overflow-auto max-h-28 whitespace-pre-wrap">{ocr.rawText.slice(0, 600)}</pre>
+            </details>
+          )}
         </CardContent></Card>
       )}
 

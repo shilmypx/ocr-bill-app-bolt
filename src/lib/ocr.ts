@@ -12,9 +12,8 @@ export async function initTesseractWorker() {
   try {
     const { createWorker } = await import('tesseract.js')
     worker = await createWorker('eng', 1, { logger: () => {}, errorHandler: () => {} })
-    // PSM 6: Assume single uniform block of text — faster for receipts, avoids
-    // column-detection overhead that confuses multi-font thermal print layouts
-    await worker.setParameters({ tessedit_pageseg_mode: '6' })
+    // Keep default PSM 3 (auto-detect layout) — handles bilingual Rafeeq bills
+    // and mixed-font Hurrier/Snoonu bills correctly. PSM 6 breaks Arabic+English.
     workerReady = true
   } catch (e) { console.warn('Tesseract init failed:', e) }
 }
@@ -547,10 +546,11 @@ export async function performOCR(
 
   // Crop strategy per partner (applied ONCE here — camera/file do NOT pre-crop for Rafeeq):
   //   Hurrier: pre-cropped by camera/file handler — pass as-is (avoid double-crop)
-  //   Rafeeq:  crop to top 55% full width — removes items list, focuses on name+phone
+  //   Rafeeq:  crop to top 70% full width — removes items list at bottom; 70% (not 55%)
+  //            gives enough margin for bills with longer headers before the phone line
   //   Others:  no crop
   const ocrImage = (partner === 'rafeeq')
-    ? await cropRightColumn(imageData, 0, 0.55)
+    ? await cropRightColumn(imageData, 0, 0.70)
     : imageData
 
   try {
