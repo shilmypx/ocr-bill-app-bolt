@@ -360,17 +360,37 @@ export function CaptureWidget() {
     return () => window.removeEventListener('keydown', onKey)
   }, [mode, phase, camActive, capture])
 
-  // Enter key in name/number inputs → save if valid
+  // Review screen keyboard shortcuts:
+  //   Enter (in any input) → save if valid
+  //   Backspace (on Save button) → clear name field
+  //   Ctrl+R → retake
   useEffect(() => {
     if (phase !== 'review') return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Enter') return
-      const tag = (e.target as HTMLElement)?.tagName
-      if (tag === 'INPUT' && canSave) { e.preventDefault(); save(form, ocr || undefined) }
+      const target = e.target as HTMLElement
+      const tag = target?.tagName
+
+      // Ctrl+R → retake (prevent browser refresh)
+      if (e.key === 'r' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault(); retake(); return
+      }
+
+      // Backspace when Save button is focused → clear name field
+      if (e.key === 'Backspace' && target?.id === 'rv-save') {
+        e.preventDefault()
+        setForm(f => ({ ...f, name: '' }))
+        setTimeout(() => (document.getElementById('rv-name') as HTMLInputElement)?.focus(), 50)
+        return
+      }
+
+      // Enter in name/number inputs → save if valid
+      if (e.key === 'Enter' && tag === 'INPUT' && canSave) {
+        e.preventDefault(); save(form, ocr || undefined)
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [phase, canSave, form, ocr, save])
+  }, [phase, canSave, form, ocr, save, retake])
 
   // Auto-capture: scan live camera frame every ~3s; auto-trigger when phone detected
   useEffect(() => {
