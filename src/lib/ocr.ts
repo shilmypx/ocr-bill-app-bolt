@@ -26,7 +26,7 @@ export async function compressImage(file: File, cropFraction = 1.0, hStartFracti
     const url = URL.createObjectURL(file)
     img.onload = () => {
       URL.revokeObjectURL(url)
-      const MAX = (cropFraction < 1 || hStartFraction > 0) ? 700 : 700  // 700px → 40% faster OCR vs 900px
+      const MAX = (cropFraction < 1 || hStartFraction > 0) ? 800 : 900  // 900px for full quality, 800px when cropped
       const srcW = img.naturalWidth, srcH = img.naturalHeight
       const srcX = Math.round(srcW * hStartFraction)   // horizontal crop start
       const srcCropW = srcW - srcX                      // width of cropped region
@@ -41,7 +41,7 @@ export async function compressImage(file: File, cropFraction = 1.0, hStartFracti
       const ctx = canvas.getContext('2d')!
       ctx.filter = 'contrast(1.5) grayscale(1) brightness(1.05)'
       ctx.drawImage(img, srcX, 0, srcCropW, cropH, 0, 0, dstW, dstH)
-      resolve(canvas.toDataURL('image/jpeg', 0.88))
+      resolve(canvas.toDataURL('image/jpeg', 0.92))
     }
     img.onerror = reject
     img.src = url
@@ -63,7 +63,7 @@ export async function cropRightColumn(imageData: string, hStart = 0.40, vEnd = 0
       const ctx = canvas.getContext('2d')!
       ctx.filter = 'contrast(1.5) grayscale(1) brightness(1.05)'
       ctx.drawImage(img, srcX, 0, srcW, srcH, 0, 0, srcW, srcH)
-      resolve(canvas.toDataURL('image/jpeg', 0.88))
+      resolve(canvas.toDataURL('image/jpeg', 0.92))
     }
     img.onerror = () => resolve(imageData)  // fallback to original on error
     img.src = imageData
