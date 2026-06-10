@@ -102,7 +102,7 @@ function isLatinName(s: string): boolean {
   if (!s || s.length < 2 || s.length > 80) return false
   if (/^\d/.test(s) || /^\+/.test(s)) return false
   if (!/^[a-zA-Z][a-zA-Z\s\-''.]*$/.test(s)) return false
-  if (/^(customer|mobile|phone|tel|order|delivery|vendor|pickup|collection|hurrier|snoonu|rafeeq|no cutlery|subtotal|total|prepaid|not paid|pro|item|qty|qar|qr|price|note|address|street|building|floor|zone|apartment|payment|online|cash|thanks|thank|village|compound|district|road|avenue|block|sector|area|gate|paradise|skimmed|labnah|matcha|frappe|smoothie|raspberry|chocolate|crunchy|croissant|sandwich|cake|latte|cappuccino|espresso|coffee|juice|toast|honey|cream|milk|fat|waffle|pancake|platinum|member|brunch|falafel|egg|taco|tacos|bun|mushroom|in\b|of\b|the\b|at\b|by\b|on\b|to\b|for\b|from\b|and\b|with\b|between\b|front\b|your\b|is\b|no\b)/i.test(s)) return false
+  if (/^(customer|mobile|phone|tel|order|delivery|vendor|pickup|collection|hurrier|snoonu|rafeeq|no cutlery|subtotal|total|prepaid|not paid|pro|item|qty|qar|qr|price|note|address|street|building|floor|zone|apartment|payment|online|cash|thanks|thank|village|compound|district|road|avenue|block|sector|area|gate|paradise|skimmed|labnah|matcha|frappe|smoothie|raspberry|chocolate|crunchy|croissant|sandwich|cake|latte|cappuccino|espresso|coffee|juice|toast|honey|cream|milk|fat|waffle|pancake|platinum|gold|member|silver|bronze|brunch|falafel|egg|taco|tacos|bun|mushroom|in\b|of\b|the\b|at\b|by\b|on\b|to\b|for\b|from\b|and\b|with\b|between\b|front\b|your\b|is\b|no\b)/i.test(s)) return false
   return true
 }
 
@@ -145,14 +145,22 @@ function snoonuExtract(lines: string[], billHasArabic: boolean): { name: string;
     if (isLatinName(after)) { name = after; break }
   }
 
-  // Phone: "Customer Phone:" label — also handles next-line split and هاتف العميل context
+  // Phone: "Customer Phone:" label
+  // NEW FORMAT: phone is 2 lines below label with Arabic label in between:
+  //   Customer Phone:
+  //   هاتف العميل      ← Arabic — must SKIP, not break
+  //   +97470696934     ← actual phone — 2 lines below
   for (let i = 0; i < lines.length; i++) {
     if (!/customer\s*phone|هاتف/i.test(lines[i])) continue
     const candidates = [...(lines[i].match(PHONE_TOKEN) || [])]
-    // Check up to 3 next lines for split phone numbers
-    for (let j = i+1; j <= i+3 && j < lines.length; j++) {
-      if (/^[\u0600-\u06FF]/.test(lines[j])) break // stop at Arabic label
-      candidates.push(...(lines[j].match(PHONE_TOKEN) || []))
+    // Check up to 4 next lines — SKIP Arabic lines (don't break on them)
+    for (let j = i+1; j <= i+4 && j < lines.length; j++) {
+      const l = lines[j]
+      // Skip Arabic-only lines (هاتف العميل etc.) — keep searching past them
+      if (/^[\u0600-\u06FF]/.test(l)) continue
+      // Stop at next major section (item list, totals)
+      if (/^(\d+\s+[A-Z]|subtotal|total|delivery|qar\b)/i.test(l)) break
+      candidates.push(...(l.match(PHONE_TOKEN) || []))
     }
     for (const m of candidates) { const p = normalisePhone(m); if (p) { phone = p.full; break } }
     if (phone) break
