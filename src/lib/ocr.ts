@@ -301,7 +301,7 @@ function hurrierExtract(lines: string[]): { name: string; phone: string } {
     for (let j = i + 1; j <= Math.min(i + 8, lines.length - 1); j++) {
       const l = lines[j].trim()
       // Hard stop at known section boundaries
-      if (/^(no cutlery|subtotal|total|delivery fee|qr\b|\d\s+[A-Z]|vendor|customer|pickup|hurrier|may\b|order nr|thanks)/i.test(l)) break
+      if (/^(no cutlery|subtotal|total|delivery fee|qr\b|\d\s+[A-Z]|vendor|customer|pickup|hurrier|may\b|order nr|thanks|black\b|white\b|villa\b|floor\b|zone\b|street\b|apartment\b)/i.test(l)) break
       if (/^[\u0600-\u06FF]/.test(l)) break  // Arabic section separator (بدون أدوات المائدة etc.)
       // Include line if it's primarily digits (≥50% digit chars) — phone fragment
       const ld = l.replace(/\D/g, '')
@@ -341,7 +341,7 @@ function hurrierExtract(lines: string[]): { name: string; phone: string } {
       }
       // Skip receipt structure, badges, address words, digits
       if (/^(hurrier|snoonu|rafeeq|collection|prepaid|not paid|pickup|at\b|am\b|pm\b|no cutlery|subtotal|total|delivery|order nr|pro\b)/i.test(l)) continue
-      if (/^(in\b|of\b|the\b|at\b|by\b|on\b|to\b|for\b|from\b|and\b|with\b|between\b|front\b|gate\b|your\b|is\b|no\b|entrance\b|building\b)/i.test(l)) continue
+      if (/^(in\b|of\b|the\b|at\b|by\b|on\b|to\b|for\b|from\b|and\b|with\b|between\b|front\b|gate\b|your\b|is\b|no\b|entrance\b|building\b|black\b|white\b|door\b|main\b|road\b|villa\b|maia\b|caffe\b|porche\b|number\b|compound\b|district\b|zone\b|floor\b|apartment\b|street\b)/i.test(l)) continue
       if (/^[\d:]+$/.test(l)) continue
       if (/[\u0600-\u06FF]/.test(l)) continue
       frags.push(l)
@@ -592,6 +592,18 @@ export async function performOCR(
       case 'hurrier': extracted = hurrierExtract(lines); break
       case 'direct':  extracted = directExtract(lines); break
       default:        extracted = standardExtract(lines, raw); break
+    }
+
+    // Universal phone fallback: if partner-specific extractor missed the phone,
+    // scan the compact raw text for any (+974)XXXXXXXX or +974XXXXXXXX pattern.
+    // Uses the (+974) prefix to avoid false positives from order numbers.
+    if (!extracted.phone) {
+      const compact = raw.replace(/\s+/g, '')
+      const mFb = compact.match(/\(\+?974\)(\d{8,9})/) || compact.match(/\+974(\d{8,9})/)
+      if (mFb) {
+        const p = normalisePhone('+974' + mFb[1])
+        if (p) extracted.phone = p.full
+      }
     }
 
     return {
