@@ -208,19 +208,25 @@ function rafeeqExtract(lines: string[]): { name: string; phone: string } {
   }
 
   // ── Phone — multi-level detection ────────────────────────────────────────────
-  // Level 1: find phone/mobile label → accumulate digits from same line + next 5 lines
-  // (uses digit accumulation instead of PHONE_TOKEN regex to handle OCR spacing artifacts)
+  // Level 1: find phone label → look for phone-pattern digits (≥5 consecutive) on that
+  // line and next 5 lines. SKIP short digit groups (dates like "122026" = 6 mixed digits).
+  // This prevents date lines between the Arabic label and the phone from corrupting digits.
   const RAFEEQ_PHONE_LABELS = /mobile\s*number|phone\s*number|رقم\s*الهاتف|هاتف/i
   for (let i = 0; i < lines.length; i++) {
     if (!RAFEEQ_PHONE_LABELS.test(lines[i])) continue
-    // Accumulate ALL digits from this line and next 5 lines
-    let rawDigits = lines[i].replace(/\D/g, '')
-    for (let j = i + 1; j <= i + 5 && j < lines.length; j++) {
-      const l = lines[j]
-      if (/^(vendor|customer name|item|total|subtotal|delivery|payment type|address|order)/i.test(l)) break
-      const ld = l.replace(/\D/g, '')
-      if (ld.length > 0) rawDigits += ld
-      if (rawDigits.length >= 11) break
+    // Extract phone-pattern digits: sequences of ≥5 consecutive digits within the line
+    const phoneDigitGroups = (s: string) =>
+      (s.match(/\d{5,}/g) || []).join('')  // only digit RUNS of ≥5 chars
+    let rawDigits = phoneDigitGroups(lines[i])
+    // If the label line already has enough digits (+974XXXXXXXX), use them directly
+    if (rawDigits.length < 8) {
+      for (let j = i + 1; j <= i + 5 && j < lines.length; j++) {
+        const l = lines[j]
+        if (/^(vendor|customer name|item|total|subtotal|delivery|payment type|address|order|thanks)/i.test(l)) break
+        const ld = phoneDigitGroups(l)
+        if (ld) rawDigits += ld
+        if (rawDigits.length >= 11) break
+      }
     }
     if (rawDigits.length >= 8) {
       const p = normalisePhone(rawDigits.startsWith('974') ? '+' + rawDigits : rawDigits)
@@ -228,11 +234,9 @@ function rafeeqExtract(lines: string[]): { name: string; phone: string } {
     }
   }
 
-  // Level 2: scan full text for (+974) or +974 pattern
+  // Level 2: compact-text search for (+974)XXXXXXXX or +974XXXXXXXX
   if (!phone) {
-    const full = lines.join(' ')
-    // Strip all whitespace from the full text to handle "( +974 )" style OCR
-    const compact = full.replace(/\s+/g, '')
+    const compact = lines.join(' ').replace(/\s+/g, '')
     const m2 = compact.match(/\(\+?974\)(\d{8,9})|\+974(\d{8,9})/)
     if (m2) {
       const local = m2[1] || m2[2]
@@ -240,9 +244,13 @@ function rafeeqExtract(lines: string[]): { name: string; phone: string } {
     }
   }
 
-  // Level 3: find any 8-digit Qatar mobile number anywhere (starts with 3-7)
+  // Level 3: find 8-digit Qatar mobile (starts 3-7) ONLY in the section AFTER the phone label
+  // — never search the full text (order numbers would match before the phone)
   if (!phone) {
-    const m3 = lines.join(' ').match(/\b([3-7]\d{7})\b/)
+    const labelIdx = lines.findIndex(l => RAFEEQ_PHONE_LABELS.test(l))
+    const searchFrom = labelIdx >= 0 ? labelIdx : 0
+    const afterLabel = lines.slice(searchFrom, searchFrom + 8).join(' ')
+    const m3 = afterLabel.match(/\b([3-7]\d{7})\b/)
     if (m3) { const p = normalisePhone(m3[1]); if (p) phone = p.full }
   }
 
