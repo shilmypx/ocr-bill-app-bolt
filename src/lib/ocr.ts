@@ -208,28 +208,33 @@ function rafeeqExtract(lines: string[]): { name: string; phone: string } {
   }
 
   // ── Phone — multi-level detection ────────────────────────────────────────────
-  // Level 1: find phone label → look for phone-pattern digits (≥5 consecutive) on that
-  // line and next 5 lines. SKIP short digit groups (dates like "122026" = 6 mixed digits).
-  // This prevents date lines between the Arabic label and the phone from corrupting digits.
+  // Level 1: accumulate ALL digits from phone label + next 5 lines, then extract the
+  // phone PATTERN from within the accumulated string.
+  // This handles: OCR-split digits ("5 5226340"), date digits between label and phone,
+  // and any whitespace-fragmented phone fragments.
   const RAFEEQ_PHONE_LABELS = /mobile\s*number|phone\s*number|رقم\s*الهاتف|هاتف/i
   for (let i = 0; i < lines.length; i++) {
     if (!RAFEEQ_PHONE_LABELS.test(lines[i])) continue
-    // Extract phone-pattern digits: sequences of ≥5 consecutive digits within the line
-    const phoneDigitGroups = (s: string) =>
-      (s.match(/\d{5,}/g) || []).join('')  // only digit RUNS of ≥5 chars
-    let rawDigits = phoneDigitGroups(lines[i])
-    // If the label line already has enough digits (+974XXXXXXXX), use them directly
-    if (rawDigits.length < 8) {
-      for (let j = i + 1; j <= i + 5 && j < lines.length; j++) {
-        const l = lines[j]
-        if (/^(vendor|customer name|item|total|subtotal|delivery|payment type|address|order|thanks)/i.test(l)) break
-        const ld = phoneDigitGroups(l)
-        if (ld) rawDigits += ld
-        if (rawDigits.length >= 11) break
-      }
+    // Accumulate ALL digits from this line and next 5 lines (forward only)
+    let acc = lines[i].replace(/\D/g, '')
+    for (let j = i + 1; j <= i + 5 && j < lines.length; j++) {
+      const l = lines[j]
+      if (/^(vendor|item|total|subtotal|delivery fee|payment type|thanks)/i.test(l)) break
+      acc += l.replace(/\D/g, '')
+      if (acc.length >= 24) break  // enough to extract any phone
     }
-    if (rawDigits.length >= 8) {
-      const p = normalisePhone(rawDigits.startsWith('974') ? '+' + rawDigits : rawDigits)
+    // Extract Qatar phone pattern FROM within the accumulated digits:
+    //   Pattern A: 974 + 8 digits  → handles "(+974) 55226340" → acc="97455226340"
+    //   Pattern B: 8 digits starting with 3-7 → handles bare local number "55226340"
+    let extracted = ''
+    const mA = acc.match(/974(\d{8})/)
+    if (mA) extracted = '+974' + mA[1]
+    else {
+      const mB = acc.match(/([3-7]\d{7})/)
+      if (mB) extracted = mB[1]  // will be normalised to +974XXXXXXXX
+    }
+    if (extracted) {
+      const p = normalisePhone(extracted)
       if (p) { phone = p.full; break }
     }
   }
