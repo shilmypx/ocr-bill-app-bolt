@@ -1,6 +1,6 @@
 'use client'
 import React, { useState, useEffect, useRef, useCallback } from 'react'
-import { Search, Download, ChevronDown, ChevronUp, Trash2, Edit2, Check, X, RefreshCw, Filter, AlertCircle, CheckSquare, Square, Settings2 } from 'lucide-react'
+import { Search, Download, ChevronDown, ChevronUp, Trash2, Edit2, Check, X, RefreshCw, Filter, AlertCircle, CheckSquare, Square, Settings2, FileSpreadsheet } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
@@ -138,6 +138,7 @@ export function RecordsTable() {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [deleting, setDeleting] = useState(false)
   const [exportDialog, setExportDialog] = useState<'all' | 'unique' | null>(null)
+  const [reportLoading, setReportLoading] = useState(false)
   const runId = useRef(0)
 
   // ── Direct useEffect with all deps listed — no closure issues ──────────────
@@ -305,6 +306,57 @@ export function RecordsTable() {
     return new Set((data ?? []).map((r: any) => r.contact_number).filter(Boolean)).size
   }
 
+  // Export 3-sheet report: Summary + Unique Contacts + All Records
+  const exportReport = async () => {
+    setReportLoading(true)
+    try {
+      const allRows = await getAllData()
+      const seen = new Set<string>()
+      const uniqueRows = allRows.filter((r: any) => {
+        if (!r.contact_number || seen.has(r.contact_number)) return false
+        seen.add(r.contact_number); return true
+      })
+      const totalCount    = allRows.length
+      const uniqueCount   = uniqueRows.length
+      const duplicateCount = totalCount - uniqueCount
+
+      const wb = XLSX.utils.book_new()
+
+      // Sheet 1: Summary
+      const summaryData = [
+        { Metric: 'Total Records',              Count: totalCount },
+        { Metric: 'Unique Contacts',            Count: uniqueCount },
+        { Metric: 'Duplicate Contacts',         Count: duplicateCount },
+        { Metric: 'Export Date',                Count: new Date().toLocaleDateString() },
+      ]
+      const wsSummary = XLSX.utils.json_to_sheet(summaryData)
+      wsSummary['!cols'] = [{ wch: 28 }, { wch: 16 }]
+      XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary')
+
+      // Sheet 2: Unique Records (name + contact only)
+      const uniqueData = uniqueRows.map((r: any) => ({
+        'Customer Name':   r.customer_name || '',
+        'Contact Number':  String(r.contact_number || ''),
+      }))
+      const wsUnique = XLSX.utils.json_to_sheet(uniqueData)
+      wsUnique['!cols'] = [{ wch: 30 }, { wch: 18 }]
+      XLSX.utils.book_append_sheet(wb, wsUnique, 'Unique Contacts')
+
+      // Sheet 3: All Records (name + contact only)
+      const allData = allRows.map((r: any) => ({
+        'Customer Name':   r.customer_name || '',
+        'Contact Number':  String(r.contact_number || ''),
+      }))
+      const wsAll = XLSX.utils.json_to_sheet(allData)
+      wsAll['!cols'] = [{ wch: 30 }, { wch: 18 }]
+      XLSX.utils.book_append_sheet(wb, wsAll, 'All Records')
+
+      XLSX.writeFile(wb, `bill_records_report_${new Date().toISOString().slice(0,10)}.xlsx`)
+      toast('success', `Report exported: ${totalCount.toLocaleString()} records, ${uniqueCount.toLocaleString()} unique`)
+    } catch (e: any) { toast('error', e?.message || 'Export failed') }
+    finally { setReportLoading(false) }
+  }
+
   const allSelected = rows.length > 0 && rows.every(r => selected.has(r.id))
   const toggleAll = () => setSelected(allSelected ? new Set() : new Set(rows.map(r => r.id)))
   const toggleOne = (id: string) => { const s = new Set(selected); s.has(id) ? s.delete(id) : s.add(id); setSelected(s) }
@@ -347,6 +399,10 @@ export function RecordsTable() {
           <Button variant="outline" size="sm" onClick={() => setShowFilters(s => !s)}><Filter className="h-4 w-4" />Filters</Button>
           <Button variant="outline" size="sm" onClick={() => setExportDialog('unique')}><Download className="h-4 w-4" />Unique</Button>
           <Button variant="outline" size="sm" onClick={() => setExportDialog('all')}><Download className="h-4 w-4" />All</Button>
+          <Button variant="outline" size="sm" onClick={exportReport} loading={reportLoading}
+            className="text-green-700 border-green-300 hover:bg-green-50 dark:text-green-400 dark:border-green-700 dark:hover:bg-green-900/20">
+            <FileSpreadsheet className="h-4 w-4" />Report
+          </Button>
           <Button variant="outline" size="sm" onClick={refresh} loading={loading}><RefreshCw className="h-4 w-4" /></Button>
         </div>
       </div>
