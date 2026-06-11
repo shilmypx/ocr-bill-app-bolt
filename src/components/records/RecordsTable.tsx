@@ -24,9 +24,10 @@ const ALL_COLS = [
   { key: 'ocr_mode',         label: 'OCR Mode' },
 ]
 
-function ExportDialog({ type, onClose, getAllData }: {
+function ExportDialog({ type, onClose, getAllData, getExportCount }: {
   type: 'all' | 'unique'; onClose: () => void
   getAllData: () => Promise<any[]>
+  getExportCount: (type: 'all' | 'unique') => Promise<number>
 }) {
   const [selectedCols, setSelectedCols] = useState<string[]>(
     type === 'unique'
@@ -35,6 +36,11 @@ function ExportDialog({ type, onClose, getAllData }: {
   )
   const [includeHeader, setIncludeHeader] = useState(true)
   const [loading, setLoading] = useState(false)
+  const [exportCount, setExportCount] = useState<number | null>(null)
+
+  useEffect(() => {
+    getExportCount(type).then(setExportCount)
+  }, [type]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const doExport = async () => {
     if (!selectedCols.length) { toast('error', 'Select at least one column'); return }
@@ -96,6 +102,13 @@ function ExportDialog({ type, onClose, getAllData }: {
             <p className="text-xs text-gray-400 mt-1 ml-6">Uncheck to export data rows only</p>
           </div>
         </div>
+        {exportCount !== null && (
+          <div className="px-5 pb-2">
+            <p className="text-sm text-center font-medium text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 rounded-lg py-2">
+              {exportCount === 0 ? 'No records to export' : `Will export ${exportCount.toLocaleString()} ${type === 'unique' ? 'unique contacts' : 'records'}`}
+            </p>
+          </div>
+        )}
         <div className="px-5 py-4 border-t border-gray-200 dark:border-gray-700 flex gap-2">
           <Button variant="outline" onClick={onClose} className="flex-1">Cancel</Button>
           <Button onClick={doExport} loading={loading} disabled={!selectedCols.length} className="flex-1">
@@ -244,22 +257,52 @@ export function RecordsTable() {
     return () => { cancelled = true }
   }, [page, search, dateFrom, dateTo, userFilter])
 
-  // Fetch all for export
+  // Fetch all for export — paginates in batches of 1000 to bypass PostgREST row limit
   const getAllData = async (): Promise<any[]> => {
     const { data: { session } } = await supabase.auth.getSession()
     const uid = session?.user?.id; if (!uid) return []
     const { data: prof } = await supabase.from('profiles').select('role').eq('id', uid).single()
     const isAdmin = prof?.role === 'admin'
-    let q = supabase.from('bill_records').select('*').order('created_at', { ascending: false })
-    if (!isAdmin) q = q.eq('user_id', uid)
-    const { data } = await q
-    const uids = Array.from(new Set((data ?? []).map((b: any) => b.user_id).filter(Boolean)))
+    // Paginate in batches until all records are fetched
+    const BATCH = 1000
+    let allRows: any[] = []
+    let from = 0
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      let q = supabase.from('bill_records').select('*')
+        .order('created_at', { ascending: false })
+        .range(from, from + BATCH - 1)
+      if (!isAdmin) q = q.eq('user_id', uid)
+      const { data, error } = await q
+      if (error || !data || data.length === 0) break
+      allRows = allRows.concat(data)
+      if (data.length < BATCH) break   // last page
+      from += BATCH
+    }
+    const uids = Array.from(new Set(allRows.map((b: any) => b.user_id).filter(Boolean)))
     const nameMap: Record<string, string> = {}
     if (uids.length > 0) {
       const { data: p } = await supabase.from('profiles').select('id,full_name,email').in('id', uids as string[])
       ;(p ?? []).forEach((x: any) => { nameMap[x.id] = x.full_name || x.email || '—' })
     }
-    return (data ?? []).map((b: any) => ({ ...b, _name: nameMap[b.user_id] || '—' }))
+    return allRows.map((b: any) => ({ ...b, _name: nameMap[b.user_id] || '—' }))
+  }
+
+  // Get total export count (for showing in dialog)
+  const getExportCount = async (exportType: 'all' | 'unique'): Promise<number> => {
+    const { data: { session } } = await supabase.auth.getSession()
+    const uid = session?.user?.id; if (!uid) return 0
+    const { data: prof } = await supabase.from('profiles').select('role').eq('id', uid).single()
+    const isAdmin = prof?.role === 'admin'
+    let q = supabase.from('bill_records').select('*', { count: 'exact', head: true })
+    if (!isAdmin) q = q.eq('user_id', uid)
+    const { count } = await q
+    if (exportType === 'all') return count ?? 0
+    // For unique: count distinct contact numbers
+    let q2 = supabase.from('bill_records').select('contact_number')
+    if (!isAdmin) q2 = q2.eq('user_id', uid)
+    const { data } = await q2
+    return new Set((data ?? []).map((r: any) => r.contact_number).filter(Boolean)).size
   }
 
   const allSelected = rows.length > 0 && rows.every(r => selected.has(r.id))
@@ -290,7 +333,7 @@ export function RecordsTable() {
 
   return (
     <div className="space-y-4">
-      {exportDialog && <ExportDialog type={exportDialog} onClose={() => setExportDialog(null)} getAllData={getAllData} />}
+      {exportDialog && <ExportDialog type={exportDialog} onClose={() => setExportDialog(null)} getAllData={getAllData} getExportCount={getExportCount} />}
 
       <div className="flex items-center justify-between flex-wrap gap-2">
         <p className="text-sm text-gray-500">{loading ? '...' : `${total.toLocaleString()} records`}</p>
