@@ -102,28 +102,36 @@ function NameField({ value, onChange, id }: { value: string; onChange: (v: strin
 }
 
 // Editable phone input with per-field red highlighting
-// Code box: red if not +974 | Number box: red if not exactly 8 digits
+// Normal mode:  Code red if not +974 | Number red if not 8 digits
+// Relaxed mode (manual entry): any country code + 4–15 digit local number
 function PhoneInput({ code, num, onCode, onNum, autoFocus, numId, relaxed }: {
   code: string; num: string
   onCode: (v: string) => void; onNum: (v: string) => void
   autoFocus?: boolean; numId?: string
-  relaxed?: boolean  // manual entry: no red on code, allow longer num
+  relaxed?: boolean  // manual entry: allow any country code + any number length
 }) {
   const digits = num.replace(/\D/g, '')
   const codeOk = codeValid(code)
-  const nOk = numValid(num)
+  const nOk = relaxed ? (digits.length >= 4 && digits.length <= 15) : numValid(num)
   const full = join(code, num)
   const showCodeErr = !relaxed && code.trim() !== '' && !codeOk
+  // In relaxed mode: only show error if number is too short (<4) or too long (>15)
   const showNumErr = digits.length > 0 && !nOk
+
+  // In relaxed mode show the full number preview for any valid length
+  const showPreview = !showCodeErr && !showNumErr && digits.length >= (relaxed ? 4 : 8)
 
   return (
     <div>
       <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
         Contact Number <span className="text-red-500">*</span>
-        <span className="text-gray-400 font-normal ml-1">(+974 · 8 digits)</span>
+        {relaxed
+          ? <span className="text-gray-400 font-normal ml-1">(any country · 4–15 digits)</span>
+          : <span className="text-gray-400 font-normal ml-1">(+974 · 8 digits)</span>
+        }
       </label>
       <div className="flex rounded-xl overflow-hidden border border-gray-300 dark:border-gray-600 focus-within:ring-2 focus-within:ring-blue-500">
-        {/* Country code box — red ring if not +974 */}
+        {/* Country code box */}
         <input
           value={code}
           onChange={e => onCode(e.target.value)}
@@ -132,17 +140,17 @@ function PhoneInput({ code, num, onCode, onNum, autoFocus, numId, relaxed }: {
             ${showCodeErr
               ? 'bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300 border-r-red-400'
               : 'bg-gray-50 dark:bg-gray-700 text-gray-800 dark:text-gray-200 border-r-gray-300 dark:border-r-gray-600'}`}
-          placeholder="+974"
+          placeholder={relaxed ? '+1' : '+974'}
         />
-        {/* Number box — red text if not 8 digits */}
+        {/* Number box */}
         <input
           id={numId}
           type="tel"
           value={num}
           autoFocus={autoFocus}
           autoComplete="off"
-          onChange={e => onNum(e.target.value.replace(/\D/g, '').slice(0, relaxed ? 12 : 10))}
-          placeholder="41105663"
+          onChange={e => onNum(e.target.value.replace(/\D/g, '').slice(0, relaxed ? 15 : 10))}
+          placeholder={relaxed ? '555 123 4567' : '41105663'}
           className={`flex-1 px-3 py-3 text-base font-mono focus:outline-none transition-colors
             ${showNumErr
               ? 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300'
@@ -151,10 +159,12 @@ function PhoneInput({ code, num, onCode, onNum, autoFocus, numId, relaxed }: {
       </div>
       {/* Error hints */}
       {showCodeErr && <p className="text-xs text-red-500 mt-1">Country code must be +974</p>}
-      {showNumErr && <p className="text-xs text-red-500 mt-1">Must be exactly 8 digits (currently {digits.length})</p>}
-      {!showCodeErr && !showNumErr && digits.length === 8 && (
-        <p className="text-xs text-gray-400 mt-1">Full: {full}</p>
+      {showNumErr && (
+        <p className="text-xs text-red-500 mt-1">
+          {digits.length < 4 ? `Too short — enter at least 4 digits` : `Too long — max 15 digits`}
+        </p>
       )}
+      {showPreview && <p className="text-xs text-gray-400 mt-1">Full: {full}</p>}
     </div>
   )
 }
@@ -800,12 +810,14 @@ export function CaptureWidget() {
             </div>
           </div>
           {/* Manual entry: show validation hint but never block saving */}
-          {form.num && !canSave && (
+          {form.code && form.num.replace(/\D/g, '').length >= 4 && !canSave && (
             <p className="text-xs text-gray-400 dark:text-gray-500 mt-3 text-center">
-              ℹ️ Will be saved as: {form.code}&nbsp;{form.num}
+              ℹ️ Will save as: {form.code}&thinsp;{form.num}
             </p>
           )}
-          <Button onClick={() => save(form)} loading={saving} disabled={!form.num.trim() || saving} className="w-full mt-3">Save Record</Button>
+          <Button onClick={() => save(form)} loading={saving}
+            disabled={saving || form.num.replace(/\D/g, '').length < 4}
+            className="w-full mt-3">Save Record</Button>
         </CardContent></Card>
       )}
       {/* BATCH MODE */}
