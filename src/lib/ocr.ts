@@ -130,19 +130,35 @@ function snoonuExtract(lines: string[], billHasArabic: boolean): { name: string;
   let name = ''
   let phone = ''
 
-  // Name: robust — accept any separator OCR might produce after "Customer"
-  // Handles: "Customer: NAME", "Customer | NAME", "Customer, NAME", "Customer NAME"
-  for (const line of lines) {
-    // Must start with "customer" (word boundary — rejects "Customers:", "CustomerID" etc.)
+  // Name: robust — handles all 4 Snoonu name patterns:
+  //   N1: "Customer:  Noor"          → name on same line
+  //   N2: "Customer:  شيخة المري"    → Arabic name → cleared (can't OCR Arabic)
+  //   N3: "Customer:" / "العميل" / "shaikha" → name 2+ lines below (wrapped column)
+  //   N4: "Customer  Noor Almarafi"  → name same line, no colon
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    // Must start with "customer" (word boundary — rejects "Customers:", "CustomerID")
     if (!/^customer\b/i.test(line)) continue
-    // Extract everything after the first non-letter separator
+    // Extract everything after the first non-letter separator (handles : | , space)
     const after = line.replace(/^customer[^a-zA-Z\u0600-\u06FF]*/i, '').trim()
-    if (!after) continue
-    // Skip Arabic names and non-ASCII garbage
-    if (/[\u0600-\u06FF]/.test(after) || /[^\x20-\x7E]/.test(after)) { name = ''; break }
-    // Clear very short names on Arabic-context bills (OCR garbage)
-    if (billHasArabic && after.length <= 3) { name = ''; break }
-    if (isLatinName(after)) { name = after; break }
+    if (after) {
+      // Arabic name or non-ASCII garbage → clear and stop
+      if (/[\u0600-\u06FF]/.test(after) || /[^\x20-\x7E]/.test(after)) { name = ''; break }
+      // Very short names on Arabic-context bills are OCR garbage
+      if (billHasArabic && after.length <= 3) { name = ''; break }
+      if (isLatinName(after)) { name = after; break }
+    } else {
+      // N3: "Customer:" has empty after — name may be below, past Arabic line(s)
+      // e.g.: Customer: → العميل → shaikha
+      for (let j = i + 1; j <= i + 3 && j < lines.length; j++) {
+        const l = lines[j].trim()
+        if (!l) continue
+        if (/[\u0600-\u06FF]/.test(l)) continue        // skip Arabic lines
+        if (/^customer\s*phone/i.test(l)) break           // hit phone section — stop
+        if (isLatinName(l)) { name = l; break }
+      }
+      if (name) break
+    }
   }
 
   // Phone: accumulate digits from phone label + next lines, extract Qatar pattern
