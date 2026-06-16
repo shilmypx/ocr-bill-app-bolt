@@ -145,25 +145,37 @@ function snoonuExtract(lines: string[], billHasArabic: boolean): { name: string;
     if (isLatinName(after)) { name = after; break }
   }
 
-  // Phone: "Customer Phone:" label
-  // NEW FORMAT: phone is 2 lines below label with Arabic label in between:
-  //   Customer Phone:
-  //   هاتف العميل      ← Arabic — must SKIP, not break
-  //   +97470696934     ← actual phone — 2 lines below
+  // Phone: accumulate digits from phone label + next lines, extract Qatar pattern
+  // FIXED: using specific label match to avoid false triggers:
+  //   "هاتف" alone is too broad — matches رقم الهاتف (order label) causing order
+  //   numbers to be returned as phone. Use "هاتف العميل" (Customer Phone in Arabic).
+  // Uses digit accumulation + pattern extraction (not raw PHONE_TOKEN) so OCR
+  // spacing artifacts inside the number don't cause mismatches.
+  //
+  // Supported formats:
+  //   Customer Phone: +97455228911        ← standard (phone on same line)
+  //   Customer Phone: 55228911            ← bare 8 digits
+  //   Customer Phone: +55877118           ← OCR misread +974 prefix
+  //   Customer Phone: / هاتف العميل / +97470696934  ← new format (phone 2 lines down)
   for (let i = 0; i < lines.length; i++) {
-    if (!/customer\s*phone|هاتف/i.test(lines[i])) continue
-    const candidates = [...(lines[i].match(PHONE_TOKEN) || [])]
-    // Check up to 4 next lines — SKIP Arabic lines (don't break on them)
-    for (let j = i+1; j <= i+4 && j < lines.length; j++) {
+    if (!/customer\s*phone|هاتف\s*العميل/i.test(lines[i])) continue
+    // Accumulate ALL digits from label line + next 4 lines
+    let acc = lines[i].replace(/\D/g, '')
+    for (let j = i + 1; j <= i + 4 && j < lines.length; j++) {
       const l = lines[j]
-      // Skip Arabic-only lines (هاتف العميل etc.) — keep searching past them
-      if (/^[\u0600-\u06FF]/.test(l)) continue
-      // Stop at next major section (item list, totals)
-      if (/^(\d+\s+[A-Z]|subtotal|total|delivery|qar\b)/i.test(l)) break
-      candidates.push(...(l.match(PHONE_TOKEN) || []))
+      if (/^[\u0600-\u06FF]/.test(l)) continue  // skip Arabic lines (هاتف العميل etc.)
+      if (/^(\d+\s+[A-Z]|subtotal|total|delivery|qar\b)/i.test(l)) break  // stop at items
+      acc += l.replace(/\D/g, '')
+      if (acc.length >= 20) break  // enough digits to find any phone
     }
-    for (const m of candidates) { const p = normalisePhone(m); if (p) { phone = p.full; break } }
-    if (phone) break
+    // Extract Qatar phone from accumulated digits:
+    //   Pattern A: 974 + 8 digits → handles +97455228911, (+ 974) 55228911
+    //   Pattern B: [3-7] + 7 digits → handles bare 8-digit Qatar mobiles (55228911)
+    //              [3-7] prefix EXCLUDES order numbers starting with 8, 9
+    const mA = acc.match(/974(\d{8})/)
+    if (mA) { const p = normalisePhone('+974' + mA[1]); if (p) { phone = p.full; break } }
+    const mB = acc.match(/([3-7]\d{7})/)
+    if (mB) { const p = normalisePhone(mB[1]); if (p) { phone = p.full; break } }
   }
 
   return { name, phone }
