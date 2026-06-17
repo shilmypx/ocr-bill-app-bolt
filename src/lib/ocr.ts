@@ -161,6 +161,42 @@ function snoonuExtract(lines: string[], billHasArabic: boolean): { name: string;
     }
   }
 
+  // Fuzzy name fallback: when "Customer" is garbled (e.g. "Cusiomer Jala", "dLslomar Shamma")
+  // Pattern: first word looks like garbled "Customer" (6-11 chars) + rest is valid name
+  if (!name) {
+    for (const line of lines) {
+      // Skip lines that already matched the strict pattern above
+      if (/^customer\b/i.test(line)) continue
+      // Check for: GARBLED_LABEL(6-11 chars) REAL_NAME
+      const fuzzyM = line.match(/^[A-Za-z]{6,11}[^A-Za-z]+([A-Za-z].*)$/i)
+      if (!fuzzyM) continue
+      const potentialName = fuzzyM[1].trim()
+      if (isLatinName(potentialName)) { name = potentialName; break }
+    }
+  }
+
+  // Positional name fallback: scan backward from phone label to find any Latin name
+  // Catches records where the Customer label is completely unrecognisable ("~. NBA", etc.)
+  if (!name) {
+    const phoneLabelIdx = lines.findIndex(l =>
+      /customer\s*phone|هاتف\s*العميل|هاتف|customer.*phone/i.test(l)
+    )
+    if (phoneLabelIdx > 0) {
+      for (let j = phoneLabelIdx - 1; j >= Math.max(0, phoneLabelIdx - 6); j--) {
+        const l = lines[j].trim()
+        if (!l || /[\u0600-\u06FF]/.test(l)) continue
+        if (/^(snoonu|o2|delivery|order|customer|\d{4,}|gold|platinum|member)/i.test(l)) continue
+        // Take the last word(s) if the line looks like "GARBLED NAME" or just "NAME"
+        const parts = l.split(/\s+/)
+        // Try full line first (e.g. "Shamma" alone)
+        if (isLatinName(l) && l.split(' ').length <= 4) { name = l; break }
+        // Try last word (e.g. "~. NBA" → "NBA")
+        const lastWord = parts[parts.length - 1]
+        if (isLatinName(lastWord) && lastWord.length >= 2) { name = lastWord; break }
+      }
+    }
+  }
+
   // Phone: smart extraction — avoids garbled-Arabic accumulation bug
   //
   // BUG: Tesseract sometimes garbles Arabic "هاتف العميل" into digit strings (e.g. "9747").
@@ -178,7 +214,9 @@ function snoonuExtract(lines: string[], billHasArabic: boolean): { name: string;
   //   Customer Phone: +55877118             ← OCR misread +974 prefix
   //   Customer Phone: / هاتف العميل / +97470395883  ← phone 2+ lines down
   for (let i = 0; i < lines.length; i++) {
-    if (!/customer\s*phone|هاتف\s*العميل/i.test(lines[i])) continue
+    // Phone label variants: exact (Customer Phone) + garbled Phone suffix (Phong/Phane etc)
+    // + standalone Arabic (هاتف العميل) which appears before the phone line
+    if (!/customer\s*ph[a-z]{2,5}|هاتف\s*العميل/i.test(lines[i])) continue
     let acc = lines[i].replace(/\D/g, '')
     let found = ''
     for (let j = i + 1; j <= i + 5 && j < lines.length; j++) {
@@ -186,11 +224,13 @@ function snoonuExtract(lines: string[], billHasArabic: boolean): { name: string;
       if (!l || /^[\u0600-\u06FF]/.test(l)) continue  // skip Arabic-Unicode lines
       if (/^(\d+\s+[A-Z]|subtotal|total|delivery|qar\b)/i.test(l)) break
       const ld = l.replace(/\D/g, '')
-      // KEY FIX: line starts with '+' and has phone-length digits →
-      // extract from this line ONLY (ignore accumulated garbled Arabic before it)
+      // LINE STARTS WITH '+' → real phone line, extract in isolation
+      // Pattern: [0-9]74(\d{8}) handles garbled first digit: +87... +57... +37... +07...
+      //   e.g. "+87450015066" → [0-9]74 → "874" → local="50015066" → +97450015066 ✓
       if (l.startsWith('+') && ld.length >= 8) {
-        const mA = ld.match(/974(\d{8})/);  if (mA) { found = '+974' + mA[1]; break }
-        const mB = ld.match(/([3-7]\d{7})/); if (mB) { found = mB[1];         break }
+        const mA = ld.match(/[0-9]74(\d{8})/);  if (mA) { found = '+974' + mA[1]; break }
+        // fallback: last 8 digits of this line
+        found = ld.slice(-8); break
       } else {
         acc += ld
         if (acc.length >= 20) break
@@ -632,15 +672,21 @@ export async function performOCR(
       default:        extracted = standardExtract(lines, raw); break
     }
 
-    // Universal phone fallback: if partner-specific extractor missed the phone,
-    // scan the compact raw text for any (+974)XXXXXXXX or +974XXXXXXXX pattern.
-    // Uses the (+974) prefix to avoid false positives from order numbers.
+    // Universal phone fallback — covers phones missed by partner extractors.
+    // Three patterns, most reliable first:
+    //   A: (+974)XXXXXXXX or +974XXXXXXXX  — clean prefix
+    //   B: +[0-9]74XXXXXXXX                — garbled first digit (+87..., +57..., +37...)
+    //      Handles the very common Tesseract error where "9" → "8" in "+97"
+    //   C: last 8 digits of compact text   — when prefix is completely missing
     if (!extracted.phone) {
       const compact = raw.replace(/\s+/g, '')
-      const mFb = compact.match(/\(\+?974\)(\d{8,9})/) || compact.match(/\+974(\d{8,9})/)
-      if (mFb) {
-        const p = normalisePhone('+974' + mFb[1])
-        if (p) extracted.phone = p.full
+      // Pattern A: clean +974
+      let mFb = compact.match(/\(\+?974\)(\d{8,9})/) || compact.match(/\+974(\d{8,9})/)
+      if (mFb) { const p = normalisePhone('+974' + mFb[1]); if (p) extracted.phone = p.full }
+      // Pattern B: garbled first digit — +X74XXXXXXXX (covers +87..., +57..., etc.)
+      if (!extracted.phone) {
+        const mB = compact.match(/\+[0-9]74(\d{8})/)
+        if (mB) { const p = normalisePhone('+974' + mB[1]); if (p) extracted.phone = p.full }
       }
     }
 
