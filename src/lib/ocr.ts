@@ -196,9 +196,12 @@ function snoonuExtract(lines: string[], billHasArabic: boolean): { name: string;
         if (acc.length >= 20) break
       }
     }
-    if (!found) {
-      const mA = acc.match(/974(\d{8})/);  if (mA) found = '+974' + mA[1]
-      if (!found) { const mB = acc.match(/([3-7]\d{7})/); if (mB) found = mB[1] }
+    if (!found && acc.length >= 8) {
+      // LAST-8-DIGITS: removes 974(\d{8}) pattern which fires on garbled Arabic starting
+      // with "974" and picks wrong digits. Last 8 digits = real phone local, because
+      // garbled Arabic always appears BEFORE the real phone in accumulation order.
+      // e.g. acc="974770395883" (garbled "9747"+real "70395883") → last8="70395883" ✓
+      found = acc.slice(-8)
     }
     if (found) { const p = normalisePhone(found); if (p) { phone = p.full; break } }
   }
@@ -268,16 +271,9 @@ function rafeeqExtract(lines: string[]): { name: string; phone: string } {
       acc += l.replace(/\D/g, '')
       if (acc.length >= 24) break  // enough to extract any phone
     }
-    // Extract Qatar phone pattern FROM within the accumulated digits:
-    //   Pattern A: 974 + 8 digits  → handles "(+974) 55226340" → acc="97455226340"
-    //   Pattern B: 8 digits starting with 3-7 → handles bare local number "55226340"
-    let extracted = ''
-    const mA = acc.match(/974(\d{8})/)
-    if (mA) extracted = '+974' + mA[1]
-    else {
-      const mB = acc.match(/([3-7]\d{7})/)
-      if (mB) extracted = mB[1]  // will be normalised to +974XXXXXXXX
-    }
+    // Last 8 digits of accumulation = real phone local number.
+    // Avoids 974(\d{8}) false match when garbled Arabic prefix starts with "974".
+    let extracted = acc.length >= 8 ? acc.slice(-8) : ''
     if (extracted) {
       const p = normalisePhone(extracted)
       if (p) { phone = p.full; break }
@@ -348,7 +344,12 @@ function hurrierExtract(lines: string[]): { name: string; phone: string } {
       }
     }
     if (rawDigits.length >= 8) {
-      const p = normalisePhone(rawDigits.startsWith('974') ? '+' + rawDigits : rawDigits)
+      // Try full accumulated number first; fall back to last 8 digits if normalise fails
+      let p = normalisePhone(rawDigits.startsWith('974') ? '+' + rawDigits : rawDigits)
+      if (!p && rawDigits.length > 8) {
+        // Garbled noise may have contaminated the start — try last 8 digits as local
+        p = normalisePhone(rawDigits.slice(-8))
+      }
       if (p) phone = p.full
     }
 
