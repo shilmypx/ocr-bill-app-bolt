@@ -257,7 +257,13 @@ export function CaptureWidget() {
 
   const save = useCallback(async (f: typeof empty, result?: OCRResult) => {
     const contact = join(f.code, f.num)
-    if (!f.num || !valid(f.code, f.num)) { toast('error', 'Valid contact number required'); return }
+    // Manual/Quick Entry uses relaxed validation — allow any 4+ digit number (any country)
+    // Camera/file review still requires strict +974 + 8 digits
+    const isManualMode = mode === 'manual'
+    const numDigits = f.num.replace(/\D/g, '').length
+    if (!f.num) { toast('error', 'Contact number required'); return }
+    if (!isManualMode && !valid(f.code, f.num)) { toast('error', 'Valid contact number required'); return }
+    if (isManualMode && numDigits < 4) { toast('error', 'Enter at least 4 digits'); return }
     if (!user?.id) { toast('error', 'Not logged in'); return }
     setSaving(true)
     try {
@@ -369,6 +375,21 @@ export function CaptureWidget() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [mode, phase, camActive, capture])
+
+  // Enter key in Manual/Quick Entry inputs → save if valid
+  useEffect(() => {
+    if (mode !== 'manual') return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Enter') return
+      const tag = (e.target as HTMLElement)?.tagName
+      if (tag !== 'INPUT') return
+      const numDigits = form.num.replace(/\D/g, '').length
+      if (numDigits >= 4) { e.preventDefault(); save(form) }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, form])  // save is stable callback
 
   // Review screen keyboard shortcuts:
   //   Enter (in any input) → save if valid
