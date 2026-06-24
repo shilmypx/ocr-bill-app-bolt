@@ -346,14 +346,21 @@ export function RecordsTable() {
         dateTo ? `To: ${dateTo}` : '',
       ].filter(Boolean).join('  |  ') || 'All records'
 
+      const totalCount2 = allRows.length
+      const uniqueCount2 = type === 'unique' ? rows.length
+        : new Set(allRows.map((r: any) => r.contact_number).filter(Boolean)).size
+      const dupCount2 = totalCount2 - uniqueCount2
+
       doc.setFontSize(14)
       doc.setFont('helvetica', 'bold')
       doc.text(type === 'unique' ? 'Unique Contacts Bill Records' : 'All Contacts Bill Records', 14, 16)
 
       doc.setFontSize(10)
       doc.setFont('helvetica', 'normal')
-      doc.setTextColor(80, 80, 80)
-      doc.text(`Total: ${rows.length.toLocaleString()} records`, 14, 23)
+      doc.setTextColor(60, 60, 60)
+      doc.text(`Total Records        ${totalCount2.toLocaleString()}`, 14, 24)
+      doc.text(`Unique Contacts      ${uniqueCount2.toLocaleString()}`, 14, 30)
+      doc.text(`Duplicate Contacts   ${dupCount2.toLocaleString()}`, 14, 36)
 
       // Reset text color
       doc.setTextColor(0, 0, 0)
@@ -366,7 +373,7 @@ export function RecordsTable() {
       ])
 
       autoTable(doc, {
-        startY: 28,
+        startY: 42,
         head: [['#', 'Customer Name', 'Contact Number']],
         body: tableData,
         headStyles: {
