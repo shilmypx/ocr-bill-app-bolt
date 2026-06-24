@@ -8,6 +8,8 @@ import { toast } from '@/components/ui/Toast'
 import { supabase } from '@/lib/supabase'
 import { formatDateTime } from '@/lib/utils'
 import * as XLSX from 'xlsx'
+import jsPDF from 'jspdf'
+import autoTable from 'jspdf-autotable'
 
 const PAGE_SIZE = 25
 
@@ -139,6 +141,8 @@ export function RecordsTable() {
   const [deleting, setDeleting] = useState(false)
   const [exportDialog, setExportDialog] = useState<'all' | 'unique' | null>(null)
   const [reportLoading, setReportLoading] = useState(false)
+  const [pdfAllLoading, setPdfAllLoading] = useState(false)
+  const [pdfUniqueLoading, setPdfUniqueLoading] = useState(false)
   const runId = useRef(0)
 
   // ── Direct useEffect with all deps listed — no closure issues ──────────────
@@ -318,6 +322,93 @@ export function RecordsTable() {
     return new Set((data ?? []).map((r: any) => r.contact_number).filter(Boolean)).size
   }
 
+  // Export PDF — filtered, with header and table
+  const exportPdf = async (type: 'all' | 'unique') => {
+    const setLoading = type === 'all' ? setPdfAllLoading : setPdfUniqueLoading
+    setLoading(true)
+    try {
+      const allRows = await getAllData()
+      let rows = allRows
+      if (type === 'unique') {
+        const seen = new Set<string>()
+        rows = allRows.filter((r: any) => {
+          if (!r.contact_number || seen.has(r.contact_number)) return false
+          seen.add(r.contact_number); return true
+        })
+      }
+
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+
+      // Header
+      const filterDesc = [
+        search ? `Search: "${search}"` : '',
+        dateFrom ? `From: ${dateFrom}` : '',
+        dateTo ? `To: ${dateTo}` : '',
+      ].filter(Boolean).join('  |  ') || 'All records'
+
+      doc.setFontSize(16)
+      doc.setFont('helvetica', 'bold')
+      doc.text('O2 Cafe — Bill Records', 14, 16)
+
+      doc.setFontSize(10)
+      doc.setFont('helvetica', 'normal')
+      doc.setTextColor(80, 80, 80)
+      doc.text(type === 'unique' ? 'Unique Contacts' : 'All Records', 14, 23)
+      doc.text(`Filter: ${filterDesc}`, 14, 29)
+      doc.text(`Exported: ${new Date().toLocaleDateString()}  |  Total: ${rows.length.toLocaleString()} records`, 14, 35)
+
+      // Reset text color
+      doc.setTextColor(0, 0, 0)
+
+      // Table
+      const tableData = rows.map((r: any, idx: number) => [
+        idx + 1,
+        r.customer_name || '—',
+        r.contact_number || '—',
+      ])
+
+      autoTable(doc, {
+        startY: 40,
+        head: [['#', 'Customer Name', 'Contact Number']],
+        body: tableData,
+        headStyles: {
+          fillColor: [37, 99, 235],  // blue-600
+          textColor: 255,
+          fontStyle: 'bold',
+          fontSize: 9,
+        },
+        bodyStyles: { fontSize: 8.5 },
+        alternateRowStyles: { fillColor: [248, 250, 252] },
+        columnStyles: {
+          0: { cellWidth: 12, halign: 'center' },
+          1: { cellWidth: 90 },
+          2: { cellWidth: 75 },
+        },
+        margin: { left: 14, right: 14 },
+        didDrawPage: (data: any) => {
+          // Footer with page number
+          const pageCount = (doc as any).internal.getNumberOfPages()
+          doc.setFontSize(8)
+          doc.setTextColor(150, 150, 150)
+          doc.text(
+            `Page ${data.pageNumber} of ${pageCount}`,
+            doc.internal.pageSize.getWidth() - 14,
+            doc.internal.pageSize.getHeight() - 8,
+            { align: 'right' }
+          )
+        },
+      })
+
+      const filename = `bill_records_${type}_${new Date().toISOString().slice(0,10)}.pdf`
+      doc.save(filename)
+      toast('success', `PDF exported: ${rows.length.toLocaleString()} ${type === 'unique' ? 'unique contacts' : 'records'}`)
+    } catch (e: any) {
+      toast('error', e?.message || 'PDF export failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   // Export 3-sheet report: Summary + Unique Contacts + All Records
   const exportReport = async () => {
     setReportLoading(true)
@@ -421,6 +512,14 @@ export function RecordsTable() {
           <Button variant="outline" size="sm" onClick={exportReport} loading={reportLoading}
             className="text-green-700 border-green-300 hover:bg-green-50 dark:text-green-400 dark:border-green-700 dark:hover:bg-green-900/20">
             <FileSpreadsheet className="h-4 w-4" />Report
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => exportPdf('unique')} loading={pdfUniqueLoading}
+            className="text-red-700 border-red-300 hover:bg-red-50 dark:text-red-400 dark:border-red-700 dark:hover:bg-red-900/20">
+            <Download className="h-4 w-4" />PDF Unique
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => exportPdf('all')} loading={pdfAllLoading}
+            className="text-red-700 border-red-300 hover:bg-red-50 dark:text-red-400 dark:border-red-700 dark:hover:bg-red-900/20">
+            <Download className="h-4 w-4" />PDF All
           </Button>
           <Button variant="outline" size="sm" onClick={refresh} loading={loading}><RefreshCw className="h-4 w-4" /></Button>
         </div>
