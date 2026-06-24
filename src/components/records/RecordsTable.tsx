@@ -259,12 +259,24 @@ export function RecordsTable() {
   }, [page, search, dateFrom, dateTo, userFilter])
 
   // Fetch all for export — paginates in batches of 1000 to bypass PostgREST row limit
+  // Shared helper: apply current filters to a Supabase query
+  const applyFilters = (q: any, isAdmin: boolean, uid: string) => {
+    if (!isAdmin) q = q.eq('user_id', uid)
+    else if (userFilter) q = q.eq('user_id', userFilter)
+    if (search.trim()) q = q.or(
+      `customer_name.ilike.%${search.trim()}%,contact_number.ilike.%${search.trim()}%,order_number.ilike.%${search.trim()}%`
+    )
+    if (dateFrom) q = q.gte('created_at', dateFrom + 'T00:00:00Z')
+    if (dateTo)   q = q.lte('created_at', dateTo + 'T23:59:59Z')
+    return q
+  }
+
   const getAllData = async (): Promise<any[]> => {
     const { data: { session } } = await supabase.auth.getSession()
     const uid = session?.user?.id; if (!uid) return []
     const { data: prof } = await supabase.from('profiles').select('role').eq('id', uid).single()
     const isAdmin = prof?.role === 'admin'
-    // Paginate in batches until all records are fetched
+    // Paginate in batches — applying active filters so export matches what the table shows
     const BATCH = 1000
     let allRows: any[] = []
     let from = 0
@@ -273,11 +285,11 @@ export function RecordsTable() {
       let q = supabase.from('bill_records').select('*')
         .order('created_at', { ascending: false })
         .range(from, from + BATCH - 1)
-      if (!isAdmin) q = q.eq('user_id', uid)
+      q = applyFilters(q, isAdmin, uid)
       const { data, error } = await q
       if (error || !data || data.length === 0) break
       allRows = allRows.concat(data)
-      if (data.length < BATCH) break   // last page
+      if (data.length < BATCH) break
       from += BATCH
     }
     const uids = Array.from(new Set(allRows.map((b: any) => b.user_id).filter(Boolean)))
@@ -289,19 +301,19 @@ export function RecordsTable() {
     return allRows.map((b: any) => ({ ...b, _name: nameMap[b.user_id] || '—' }))
   }
 
-  // Get total export count (for showing in dialog)
+  // Get total export count with active filters applied
   const getExportCount = async (exportType: 'all' | 'unique'): Promise<number> => {
     const { data: { session } } = await supabase.auth.getSession()
     const uid = session?.user?.id; if (!uid) return 0
     const { data: prof } = await supabase.from('profiles').select('role').eq('id', uid).single()
     const isAdmin = prof?.role === 'admin'
     let q = supabase.from('bill_records').select('*', { count: 'exact', head: true })
-    if (!isAdmin) q = q.eq('user_id', uid)
+    q = applyFilters(q, isAdmin, uid)
     const { count } = await q
     if (exportType === 'all') return count ?? 0
-    // For unique: count distinct contact numbers
+    // For unique: count distinct contact numbers within filtered set
     let q2 = supabase.from('bill_records').select('contact_number')
-    if (!isAdmin) q2 = q2.eq('user_id', uid)
+    q2 = applyFilters(q2, isAdmin, uid)
     const { data } = await q2
     return new Set((data ?? []).map((r: any) => r.contact_number).filter(Boolean)).size
   }
@@ -323,10 +335,17 @@ export function RecordsTable() {
       const wb = XLSX.utils.book_new()
 
       // Sheet 1: Summary
+      const filterDesc = [
+        search ? `Search: "${search}"` : '',
+        dateFrom ? `From: ${dateFrom}` : '',
+        dateTo ? `To: ${dateTo}` : '',
+      ].filter(Boolean).join(', ') || 'No filters (all data)'
+
       const summaryData = [
-        { Metric: 'Total Records',              Count: totalCount },
+        { Metric: 'Total Records (filtered)',   Count: totalCount },
         { Metric: 'Unique Contacts',            Count: uniqueCount },
         { Metric: 'Duplicate Contacts',         Count: duplicateCount },
+        { Metric: 'Active Filters',             Count: filterDesc },
         { Metric: 'Export Date',                Count: new Date().toLocaleDateString() },
       ]
       const wsSummary = XLSX.utils.json_to_sheet(summaryData)
